@@ -37,7 +37,7 @@ function generateMasterPrompt(info) {
   const addr = info.address || '[Address]';
   const hours = info.hours || 'Monday through Friday, 9:00 AM to 6:00 PM';
   const services = info.services || '[List of services]';
-  const languages = info.languages || 'English';
+  const languages = info.languages || 'English, Spanish';
   const website = info.websiteUrl || '[website URL]';
   const email = info.ownerEmail || '[email]';
   const ownerName = info.ownerName || '[Owner Name]';
@@ -75,6 +75,8 @@ ${services}
 
 ## LANGUAGES
 ${languages}
+- If the caller speaks Spanish, respond entirely in Spanish. If they speak English, respond in English.
+- Seamlessly switch languages mid-conversation if the caller switches.
 
 ## CORE RESPONSIBILITIES (in priority order)
 

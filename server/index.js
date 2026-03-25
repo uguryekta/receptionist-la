@@ -231,7 +231,8 @@ async function releaseTwilioNumber(numberSid) {
 function buildAssistantModel(masterPrompt) {
   const systemContent =
     masterPrompt +
-    "\n\nYou are a friendly and helpful AI receptionist. Answer questions about the business, help customers with product inquiries, take messages, and assist with any requests. Be warm, professional, and concise.";
+    "\n\nYou are a friendly and helpful AI receptionist. Answer questions about the business, help customers with product inquiries, take messages, and assist with any requests. Be warm, professional, and concise." +
+    "\n\nYou are fully bilingual in English and Spanish. If the caller speaks Spanish, respond entirely in Spanish. If they speak English, respond in English. Seamlessly switch languages mid-conversation if the caller switches.";
 
   return {
     provider: "openai",
@@ -257,7 +258,7 @@ app.post("/api/agents", requireAuth, async (req, res) => {
     // 1. Create Vapi assistant with transferCall tool
     const assistant = await vapi.assistants.create({
       name: `${businessName} Receptionist`,
-      firstMessage: `Hello! Thank you for calling ${businessName}. How can I help you today?`,
+      firstMessage: `Hello! Thank you for calling ${businessName}. I can assist you in English or Spanish. How can I help you today?`,
       model: buildAssistantModel(masterPrompt),
       voice: { provider: "11labs", voiceId: "burt" },
     });
