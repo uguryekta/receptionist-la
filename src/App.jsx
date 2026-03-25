@@ -1,3 +1,4 @@
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Hero from './components/Hero';
 import Features from './components/Features';
@@ -8,8 +9,9 @@ import CTA from './components/CTA';
 import FAQ from './components/FAQ';
 import BookMeeting from './components/BookMeeting';
 import Footer from './components/Footer';
+import Dashboard from './components/Dashboard';
 
-export default function App() {
+function LandingPage() {
   return (
     <>
       <Navbar />
@@ -23,5 +25,16 @@ export default function App() {
       <BookMeeting />
       <Footer />
     </>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/dashboard" element={<Dashboard />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
