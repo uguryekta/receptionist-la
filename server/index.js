@@ -768,203 +768,63 @@ app.post("/api/scrape-google-maps", requireAuth, async (req, res) => {
       }
     }
 
-    // Extract info from the URL itself (works even if page fetch fails)
-    const result = {};
-
     // Extract business name from URL path: /maps/place/Business+Name/
+    const result = {};
     const placeMatch = targetUrl.match(/\/maps\/place\/([^/@]+)/);
     if (placeMatch) {
       result.businessName = decodeURIComponent(placeMatch[1].replace(/\+/g, " "));
     }
 
-    // Extract coordinates from URL
-    const coordMatch = targetUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
-    if (coordMatch) {
-      result.latitude = coordMatch[1];
-      result.longitude = coordMatch[2];
-    }
-
-    // Now fetch the actual Google Maps page for more details
-    let html = "";
-    try {
-      const response = await fetch(targetUrl, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(15000),
-      });
-      if (response.ok) {
-        html = await response.text();
-      }
-    } catch (_) {
-      // If page fetch fails, we still have URL-extracted data
-    }
-
-    // Extract business name from title or meta (override URL-extracted name if better)
-    if (html) {
-      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-      if (titleMatch) {
-        const title = titleMatch[1].replace(/\s*[-–]\s*Google\s*Maps.*$/i, "").trim();
-        if (title && title !== "Google Maps") {
-          result.businessName = title;
-        }
-      }
-
-      // Try to extract from Google Maps embedded data arrays
-      // Google embeds business info in JS arrays like: ["Business Name",null,null,["address",...]]
-      const embeddedDataPatterns = [
-        // Phone number patterns in embedded data
-        /\["(\(\d{3}\)\s*\d{3}-\d{4})"\]/g,
-        /\["(\+1\s*\d{3}[-\s]\d{3}[-\s]\d{4})"\]/g,
-      ];
-      for (const pat of embeddedDataPatterns) {
-        const m = html.match(pat);
-        if (m && !result.phone) {
-          const phoneClean = m[0].replace(/[\[\]"]/g, "");
-          if (phoneClean.match(/\d/g)?.length >= 10) {
-            result.phone = phoneClean;
-          }
-        }
-      }
-
-      // Extract address from embedded data - look for street patterns in the raw HTML
-      if (!result.address) {
-        const addrInData = html.match(/"(\d+\s+[A-Za-z\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln|Lane|Ct|Court|Pl|Place)[^"]{0,80})"/i);
-        if (addrInData) result.address = addrInData[1].trim();
-      }
-
-      // Extract website from embedded data
-      if (!result.website) {
-        const webMatch = html.match(/"(https?:\/\/(?:www\.)?(?!google\.com|gstatic\.com|googleapis\.com|schema\.org)[a-zA-Z0-9][\w.-]+\.[a-z]{2,}(?:\/[^"]*)?)"(?!.*schema)/i);
-        if (webMatch && !webMatch[1].includes("schema.org")) result.website = webMatch[1];
-      }
-
-      // Extract hours from embedded data arrays
-      if (!result.hours) {
-        const hourStrings = [];
-        const dayPatterns = html.matchAll(/"((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)[^"]{3,80})"/gi);
-        for (const dm of dayPatterns) {
-          if (/\d/.test(dm[1])) {
-            hourStrings.push(dm[1]);
-          }
-        }
-        if (hourStrings.length > 0) {
-          result.hours = [...new Set(hourStrings)].slice(0, 7).join("; ");
-        }
-      }
-
-      // Extract category/type from embedded data
-      if (!result.category) {
-        // Google Maps often has category near the business name in embedded arrays
-        const catPatterns = [
-          /Auto parts store|Auto repair shop|Tire shop|Car dealer|Gas station/i,
-          /Restaurant|Cafe|Bakery|Bar|Pizza|Coffee shop|Fast food/i,
-          /Hair salon|Beauty salon|Barber shop|Spa|Nail salon/i,
-          /Dentist|Doctor|Hospital|Clinic|Pharmacy|Medical/i,
-          /Law firm|Attorney|Lawyer|Accountant|Insurance/i,
-          /Gym|Fitness|Yoga|Pilates|Martial arts/i,
-          /Pet store|Veterinarian|Pet grooming/i,
-          /Plumber|Electrician|HVAC|Contractor|Handyman/i,
-          /Real estate|Property management/i,
-          /Hotel|Motel|Inn|Resort/i,
-        ];
-        for (const cp of catPatterns) {
-          const cm = html.match(new RegExp(`"(${cp.source}[^"]*)"`, "i"));
-          if (cm) {
-            result.category = cm[1];
-            break;
-          }
-        }
-      }
-    }
-
-    // Try to extract from structured data (JSON-LD)
-    const jsonLdMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
-    for (const match of jsonLdMatches) {
+    // Use Google Places API if key is available (much more reliable than scraping)
+    const GOOGLE_API_KEY = process.env.GOOGLE_PLACES_API_KEY;
+    if (GOOGLE_API_KEY && result.businessName) {
       try {
-        const jsonStr = match.replace(/<script[^>]*>/i, "").replace(/<\/script>/i, "").trim();
-        const data = JSON.parse(jsonStr);
-        if (data.name) result.businessName = data.name;
-        if (data.address) {
-          const addr = data.address;
-          if (typeof addr === "string") {
-            result.address = addr;
-          } else if (addr.streetAddress) {
-            result.address = [addr.streetAddress, addr.addressLocality, addr.addressRegion, addr.postalCode]
-              .filter(Boolean)
-              .join(", ");
+        // Step 1: Find the place using Text Search
+        const searchRes = await fetch(
+          `https://places.googleapis.com/v1/places:searchText`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Goog-Api-Key": GOOGLE_API_KEY,
+              "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.regularOpeningHours,places.types,places.rating,places.userRatingCount,places.primaryType,places.primaryTypeDisplayName",
+            },
+            body: JSON.stringify({ textQuery: result.businessName }),
+            signal: AbortSignal.timeout(10000),
+          }
+        );
+
+        if (searchRes.ok) {
+          const searchData = await searchRes.json();
+          const place = searchData.places?.[0];
+          if (place) {
+            if (place.displayName?.text) result.businessName = place.displayName.text;
+            if (place.formattedAddress) result.address = place.formattedAddress;
+            if (place.nationalPhoneNumber) result.phone = place.nationalPhoneNumber;
+            if (place.websiteUri) result.website = place.websiteUri;
+            if (place.primaryTypeDisplayName?.text) {
+              result.category = place.primaryTypeDisplayName.text;
+            } else if (place.primaryType) {
+              result.category = place.primaryType.replace(/_/g, " ");
+            }
+            if (place.rating) {
+              result.rating = `${place.rating}/5 (${place.userRatingCount || "?"} reviews)`;
+            }
+            if (place.regularOpeningHours?.weekdayDescriptions) {
+              result.hours = place.regularOpeningHours.weekdayDescriptions.join("; ");
+            }
+            // Determine service area from address
+            if (result.address) {
+              const cityMatch = result.address.match(/,\s*([A-Za-z\s]+),\s*[A-Z]{2}/);
+              if (cityMatch) {
+                result.serviceArea = `${cityMatch[1].trim()} and surrounding areas`;
+              }
+            }
           }
         }
-        if (data.telephone) result.phone = data.telephone;
-        if (data.url) result.website = data.url;
-        if (data.openingHours) {
-          result.hours = Array.isArray(data.openingHours)
-            ? data.openingHours.join(", ")
-            : data.openingHours;
-        }
-        if (data.servesCuisine || data["@type"]) {
-          result.category = data.servesCuisine || data["@type"];
-        }
-        if (data.aggregateRating?.ratingValue) {
-          result.rating = `${data.aggregateRating.ratingValue}/5 (${data.aggregateRating.reviewCount || "?"} reviews)`;
-        }
-      } catch (_) {
-        // Skip invalid JSON-LD
-      }
-    }
-
-    // Fallback: extract from the page HTML content using common Google Maps patterns
-    const cleaned = (html || "")
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    // Try to find address if not from JSON-LD
-    if (!result.address) {
-      const addrMatch = cleaned.match(/(\d+\s+[\w\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln|Lane|Ct|Court|Pl|Place)[^,]*,\s*[A-Za-z\s]+,\s*[A-Z]{2}\s*\d{5})/i);
-      if (addrMatch) result.address = addrMatch[1].trim();
-    }
-
-    // Try to find phone if not from JSON-LD
-    if (!result.phone) {
-      const phoneMatch = cleaned.match(/(\(\d{3}\)\s*\d{3}[-.]?\d{4}|\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/);
-      if (phoneMatch) result.phone = phoneMatch[1].trim();
-    }
-
-    // Try to find hours from common patterns
-    if (!result.hours) {
-      // Look for day-time patterns
-      const hoursMatch = cleaned.match(/((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[\w]*[\s:]+\d{1,2}[:\d]*\s*(?:AM|PM|am|pm)[\s\S]{0,200})/i);
-      if (hoursMatch) {
-        result.hours = hoursMatch[1].substring(0, 200).trim();
-      }
-    }
-
-    // Try to find category/type
-    if (!result.category) {
-      const catMatch = cleaned.match(/(?:Category|Type)[\s:]+([A-Za-z\s&,]+?)(?:\.|,|\n|$)/i);
-      if (catMatch) result.category = catMatch[1].trim();
-    }
-
-    // Extract rating if available
-    if (!result.rating) {
-      const ratingMatch = cleaned.match(/(\d\.\d)\s*(?:stars?|out of 5|\([\d,]+\s*reviews?\))/i);
-      if (ratingMatch) result.rating = ratingMatch[0].trim();
-    }
-
-    // Try to determine service area from address
-    if (result.address && !result.serviceArea) {
-      const cityMatch = result.address.match(/,\s*([A-Za-z\s]+),\s*[A-Z]{2}/);
-      if (cityMatch) {
-        result.serviceArea = `${cityMatch[1].trim()} and surrounding areas`;
+      } catch (err) {
+        console.error("Google Places API error:", err.message);
+        // Fall through to basic extraction
       }
     }
 
