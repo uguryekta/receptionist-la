@@ -411,10 +411,13 @@ app.post("/api/agents/:id/toggle", requireAuth, async (req, res) => {
 
     try {
       if (newStatus) {
+        // Reactivate: restore full assistant
         await vapi.assistants.update(agent.assistantId, {
           model: buildAssistantModel(agent.masterPrompt),
+          firstMessage: `Hello! Thank you for calling ${agent.businessName}. I can assist you in English or Spanish. How can I help you today?`,
         });
       } else {
+        // Deactivate: replace everything with inactive message
         await vapi.assistants.update(agent.assistantId, {
           model: {
             provider: "openai",
@@ -422,15 +425,15 @@ app.post("/api/agents/:id/toggle", requireAuth, async (req, res) => {
             messages: [
               {
                 role: "system",
-                content: "You are a temporary message system. Politely inform the caller that this line is currently inactive and suggest they try again later or visit the business website. Keep it brief and professional.",
+                content: "You are a temporary message system. The business line is currently inactive. After your greeting, if the caller asks anything, just repeat that the line is inactive and suggest trying again later.",
               },
             ],
           },
+          firstMessage: "We're sorry, this line is currently inactive. Please try again later or visit our website. Goodbye.",
         });
       }
     } catch (vapiErr) {
       console.error("Vapi update failed during toggle:", vapiErr.message);
-      // Still toggle locally even if Vapi update fails
     }
 
     agent.active = newStatus;
