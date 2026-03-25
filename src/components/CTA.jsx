@@ -11,7 +11,7 @@ export default function CTA() {
         </p>
         <div className="cta-actions">
           <a href="#book" className="btn btn-primary btn-lg">
-            Book Free Consultation
+            Book a 30-min Call
             <ArrowRight size={18} />
           </a>
         </div>
