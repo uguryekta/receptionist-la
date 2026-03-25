@@ -419,10 +419,12 @@ app.post("/api/scrape-website", requireAuth, async (req, res) => {
     // Fetch the website HTML
     const response = await fetch(targetUrl, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; ReceptionistLA/1.0)",
-        Accept: "text/html,application/xhtml+xml",
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       },
-      signal: AbortSignal.timeout(10000),
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
     });
 
     if (!response.ok) {
@@ -431,13 +433,107 @@ app.post("/api/scrape-website", requireAuth, async (req, res) => {
 
     const html = await response.text();
 
-    // Extract useful text content (strip HTML tags, scripts, styles)
+    // ---------- Extract structured data (JSON-LD) ----------
+    const jsonLdData = {};
+    const jsonLdMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+    for (const match of jsonLdMatches) {
+      try {
+        const jsonStr = match.replace(/<script[^>]*>/i, "").replace(/<\/script>/i, "").trim();
+        const data = JSON.parse(jsonStr);
+        const items = Array.isArray(data) ? data : data["@graph"] ? data["@graph"] : [data];
+        for (const item of items) {
+          if (item.name) jsonLdData.name = jsonLdData.name || item.name;
+          if (item.description) jsonLdData.description = jsonLdData.description || item.description;
+          if (item.telephone) jsonLdData.phone = jsonLdData.phone || item.telephone;
+          if (item.email) jsonLdData.email = jsonLdData.email || item.email;
+          if (item.url) jsonLdData.website = jsonLdData.website || item.url;
+          if (item.openingHours) {
+            jsonLdData.hours = Array.isArray(item.openingHours) ? item.openingHours.join(", ") : item.openingHours;
+          }
+          if (item.openingHoursSpecification) {
+            const specs = Array.isArray(item.openingHoursSpecification) ? item.openingHoursSpecification : [item.openingHoursSpecification];
+            const dayMap = { Monday: "Mon", Tuesday: "Tue", Wednesday: "Wed", Thursday: "Thu", Friday: "Fri", Saturday: "Sat", Sunday: "Sun" };
+            jsonLdData.hours = specs.map((s) => {
+              const days = Array.isArray(s.dayOfWeek) ? s.dayOfWeek : [s.dayOfWeek];
+              const dayNames = days.map((d) => dayMap[d?.replace("https://schema.org/", "")] || d).join(", ");
+              return `${dayNames}: ${s.opens || "?"} - ${s.closes || "?"}`;
+            }).join("; ");
+          }
+          if (item.address) {
+            const addr = item.address;
+            if (typeof addr === "string") {
+              jsonLdData.address = addr;
+            } else {
+              jsonLdData.address = [addr.streetAddress, addr.addressLocality, addr.addressRegion, addr.postalCode].filter(Boolean).join(", ");
+            }
+          }
+          if (item["@type"]) {
+            const types = Array.isArray(item["@type"]) ? item["@type"] : [item["@type"]];
+            const bizType = types.find((t) => !["WebSite", "WebPage", "Organization", "BreadcrumbList", "SearchAction", "ItemList"].includes(t));
+            if (bizType) jsonLdData.industry = jsonLdData.industry || bizType.replace(/([a-z])([A-Z])/g, "$1 $2");
+          }
+          // Extract services from hasOfferCatalog or makesOffer
+          if (item.hasOfferCatalog?.itemListElement) {
+            const offers = item.hasOfferCatalog.itemListElement;
+            jsonLdData.services = offers.map((o) => o.name || o.itemOffered?.name).filter(Boolean);
+          }
+          if (item.makesOffer) {
+            const offers = Array.isArray(item.makesOffer) ? item.makesOffer : [item.makesOffer];
+            jsonLdData.services = (jsonLdData.services || []).concat(
+              offers.map((o) => o.itemOffered?.name || o.name).filter(Boolean)
+            );
+          }
+          // Payment accepted
+          if (item.paymentAccepted) jsonLdData.paymentMethods = item.paymentAccepted;
+          // Languages
+          if (item.availableLanguage) {
+            const langs = Array.isArray(item.availableLanguage) ? item.availableLanguage : [item.availableLanguage];
+            jsonLdData.languages = langs.map((l) => (typeof l === "string" ? l : l.name)).filter(Boolean).join(", ");
+          }
+          // Price range
+          if (item.priceRange) jsonLdData.priceRange = item.priceRange;
+          // Area served
+          if (item.areaServed) {
+            const areas = Array.isArray(item.areaServed) ? item.areaServed : [item.areaServed];
+            jsonLdData.serviceArea = areas.map((a) => (typeof a === "string" ? a : a.name)).filter(Boolean).join(", ");
+          }
+        }
+      } catch (_) {
+        // Skip invalid JSON-LD
+      }
+    }
+
+    // ---------- Extract text content ----------
+    // Keep list items as separate entries for service extraction
+    const htmlForLists = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "");
+
+    // Extract list items (often used for services/features)
+    const listItems = [];
+    const liMatches = htmlForLists.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) || [];
+    for (const li of liMatches) {
+      const text = li.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (text.length > 3 && text.length < 150) {
+        listItems.push(text);
+      }
+    }
+
+    // Extract headings for context
+    const headings = [];
+    const hMatches = htmlForLists.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi) || [];
+    for (const h of hMatches) {
+      const text = h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (text.length > 2 && text.length < 200) {
+        headings.push(text);
+      }
+    }
+
     const cleaned = html
       .replace(/<script[\s\S]*?<\/script>/gi, "")
       .replace(/<style[\s\S]*?<\/style>/gi, "")
       .replace(/<nav[\s\S]*?<\/nav>/gi, "")
       .replace(/<footer[\s\S]*?<\/footer>/gi, "")
-      .replace(/<header[\s\S]*?<\/header>/gi, "")
       .replace(/<[^>]+>/g, " ")
       .replace(/&nbsp;/g, " ")
       .replace(/&amp;/g, "&")
@@ -446,41 +542,178 @@ app.post("/api/scrape-website", requireAuth, async (req, res) => {
       .replace(/&#\d+;/g, "")
       .replace(/\s+/g, " ")
       .trim()
-      .substring(0, 8000); // Limit to 8000 chars
+      .substring(0, 12000);
 
-    // Extract meta description
-    const metaDescMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i);
+    // ---------- Extract meta info ----------
+    const metaDescMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)
+      || html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']description["']/i);
     const metaDesc = metaDescMatch ? metaDescMatch[1] : "";
 
-    // Extract title
+    const ogDescMatch = html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']+)["']/i);
+    const ogDesc = ogDescMatch ? ogDescMatch[1] : "";
+
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
     const pageTitle = titleMatch ? titleMatch[1].trim() : "";
 
-    // Try to find phone numbers
+    // ---------- Extract contact info ----------
     const phoneMatches = cleaned.match(/(\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/g) || [];
     const phones = [...new Set(phoneMatches)].slice(0, 3);
 
-    // Try to find email addresses
     const emailMatches = cleaned.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
-    const emails = [...new Set(emailMatches)].slice(0, 3);
+    const emails = [...new Set(emailMatches.filter((e) => !e.includes("sentry") && !e.includes("webpack") && !e.includes("example")))].slice(0, 3);
 
-    // Try to find address patterns
-    const addressMatch = cleaned.match(/\d+\s+[\w\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln|Lane|Ct|Court|Pl|Place)[.,]?\s*(?:Suite|Ste|#|Apt)?\s*\d*[.,]?\s*(?:Los Angeles|LA|Hollywood|Beverly Hills|Santa Monica|Pasadena|Burbank|Glendale|Long Beach|Torrance|Culver City|West Hollywood|Venice|Sherman Oaks|Encino|Tarzana|Woodland Hills|Northridge|Van Nuys|Studio City|North Hollywood|Koreatown|Downtown|Echo Park|Silver Lake|Los Feliz|Highland Park|Eagle Rock|Atwater Village|Glassell Park|Mount Washington)[.,]?\s*(?:CA|California)?\s*\d{0,5}/i);
-    const address = addressMatch ? addressMatch[0].trim() : "";
+    // ---------- Extract address ----------
+    let address = jsonLdData.address || "";
+    if (!address) {
+      const addrMatch = cleaned.match(/(\d+\s+[\w\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln|Lane|Ct|Court|Pl|Place)[.,]?\s*(?:Suite|Ste|#|Apt)?\s*\d*[.,]?\s*[A-Za-z\s]+,\s*(?:CA|California)\s*\d{0,5})/i);
+      if (addrMatch) address = addrMatch[0].trim();
+    }
 
-    // Try to find hours
-    const hoursPatterns = cleaned.match(/(?:hours|open|schedule|we're open|we are open)[:\s]*([^.]{10,150})/i);
-    const hours = hoursPatterns ? hoursPatterns[1].trim() : "";
+    // ---------- Extract hours ----------
+    let hours = jsonLdData.hours || "";
+    if (!hours) {
+      // Try day-time patterns
+      const hoursBlock = cleaned.match(/((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[\w]*\s*[-:]\s*(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)?[\w]*\s*[-:]?\s*\d{1,2}[:\d]*\s*(?:AM|PM|am|pm)\s*[-–to]+\s*\d{1,2}[:\d]*\s*(?:AM|PM|am|pm)[\s\S]{0,300})/i);
+      if (hoursBlock) {
+        hours = hoursBlock[1].substring(0, 300).trim();
+      } else {
+        const hoursFallback = cleaned.match(/(?:hours|open|schedule)[:\s]*([^.]{10,200})/i);
+        if (hoursFallback) hours = hoursFallback[1].trim();
+      }
+    }
+
+    // ---------- Extract services ----------
+    let services = jsonLdData.services || [];
+
+    // Look for services section in the HTML
+    if (services.length === 0) {
+      // Find list items near "service" headings
+      const serviceHeadingIdx = headings.findIndex((h) =>
+        /services?|what we (?:do|offer)|our (?:services|offerings|treatments|specialties|menu)|menu/i.test(h)
+      );
+
+      if (serviceHeadingIdx >= 0) {
+        // Get the HTML section after that heading for list items
+        const serviceHeading = headings[serviceHeadingIdx];
+        const headingRegex = new RegExp(serviceHeading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+        const headingPos = cleaned.search(headingRegex);
+        if (headingPos >= 0) {
+          const sectionText = cleaned.substring(headingPos, headingPos + 1500);
+          // Extract items that look like services (capitalized phrases, bullet-point style)
+          const serviceItems = sectionText.match(/(?:^|\s)([A-Z][\w\s&,/'-]{3,60})(?:\s*[-–|•]|\s*\$|\s*[.:])/gm) || [];
+          services = serviceItems.map((s) => s.trim()).filter((s) => s.length > 3 && s.length < 80).slice(0, 20);
+        }
+      }
+
+      // Fallback: look for common service patterns in list items
+      if (services.length === 0) {
+        const serviceKeywords = /haircut|color|highlight|treatment|massage|facial|manicure|pedicure|wax|clean|repair|install|consult|inspection|exam|filling|crown|implant|orthodont|whiten|extraction|root canal|check-?up|oil change|brake|tire|alignment|tune|diagnos|cut|style|blowout|perm|extension|balayage|ombre|keratin|botox|filler|laser|peel|microderm|lash|brow|tattoo|piercing|detail|wash|polish|tint|wrap|body work|paint|dent/i;
+        const serviceItems = listItems.filter((item) => serviceKeywords.test(item));
+        if (serviceItems.length > 0) {
+          services = serviceItems.slice(0, 20);
+        }
+      }
+
+      // If still nothing, try extracting from patterns like "We offer X, Y, and Z"
+      if (services.length === 0) {
+        const offerMatch = cleaned.match(/(?:we (?:offer|provide|specialize in)|our services include|services?:)\s*([^.]{20,500})/i);
+        if (offerMatch) {
+          services = offerMatch[1].split(/[,;•|]/).map((s) => s.trim()).filter((s) => s.length > 3 && s.length < 80);
+        }
+      }
+    }
+
+    // ---------- Extract additional details ----------
+    let description = jsonLdData.description || metaDesc || ogDesc || "";
+
+    // Try to find an "about" section
+    let aboutText = "";
+    const aboutHeadingIdx = headings.findIndex((h) =>
+      /about\s*(?:us)?|who we are|our story|our mission|welcome/i.test(h)
+    );
+    if (aboutHeadingIdx >= 0) {
+      const aboutHeading = headings[aboutHeadingIdx];
+      const aboutRegex = new RegExp(aboutHeading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const aboutPos = cleaned.search(aboutRegex);
+      if (aboutPos >= 0) {
+        aboutText = cleaned.substring(aboutPos + aboutHeading.length, aboutPos + aboutHeading.length + 600).trim();
+        // Clean up to first sentence or two
+        const sentences = aboutText.match(/[^.!?]+[.!?]+/g) || [];
+        aboutText = sentences.slice(0, 3).join(" ").trim();
+      }
+    }
+
+    // ---------- Extract languages ----------
+    let languages = jsonLdData.languages || "";
+    if (!languages) {
+      const langMatch = cleaned.match(/(?:languages?|we speak|hablamos|se habla)[:\s]*([\w\s,&]+)/i);
+      if (langMatch) languages = langMatch[1].trim();
+    }
+
+    // ---------- Extract payment methods ----------
+    let paymentMethods = jsonLdData.paymentMethods || "";
+    if (!paymentMethods) {
+      const payMatch = cleaned.match(/(?:payment|we accept|accepted|pay(?:ment)?\s*methods?)[:\s]*([\w\s,&/]+)/i);
+      if (payMatch) paymentMethods = payMatch[1].trim();
+    }
+
+    // ---------- Extract parking info ----------
+    let parking = "";
+    const parkingMatch = cleaned.match(/(?:parking)[:\s]*([^.]{10,150})/i);
+    if (parkingMatch) parking = parkingMatch[1].trim();
+
+    // ---------- Industry from headings/description ----------
+    let industry = jsonLdData.industry || "";
+    if (!industry && description) {
+      // Try to infer from meta description
+      const industryPatterns = [
+        /(?:hair\s*salon|beauty\s*salon|barber)/i,
+        /(?:dental|dentist|orthodont)/i,
+        /(?:law\s*firm|attorney|lawyer|legal)/i,
+        /(?:auto\s*(?:repair|body|shop)|mechanic|automotive)/i,
+        /(?:restaurant|cafe|bistro|eatery|dining)/i,
+        /(?:medical|doctor|physician|clinic|healthcare)/i,
+        /(?:spa|wellness|massage|therapy)/i,
+        /(?:plumb|electric|hvac|contractor|handyman|roofing)/i,
+        /(?:real\s*estate|realt)/i,
+        /(?:vet|veterinar|animal|pet)/i,
+        /(?:fitness|gym|yoga|pilates|training)/i,
+        /(?:photography|photographer|photo\s*studio)/i,
+        /(?:daycare|childcare|preschool|tutoring|education)/i,
+        /(?:cleaning|janitorial|maid)/i,
+        /(?:landscaping|garden|lawn|tree\s*service)/i,
+        /(?:insurance|financial|accounting|tax|cpa)/i,
+        /(?:nail\s*salon|nail\s*spa|manicure)/i,
+      ];
+      const fullText = (description + " " + pageTitle).toLowerCase();
+      for (const p of industryPatterns) {
+        const m = fullText.match(p);
+        if (m) {
+          industry = m[0].charAt(0).toUpperCase() + m[0].slice(1);
+          break;
+        }
+      }
+    }
 
     return res.json({
       success: true,
       data: {
         pageTitle,
         metaDescription: metaDesc,
+        description,
+        aboutText,
         phones,
         emails,
         address,
         hours,
+        services: services.slice(0, 25),
+        languages,
+        paymentMethods,
+        parking,
+        industry,
+        serviceArea: jsonLdData.serviceArea || "",
+        priceRange: jsonLdData.priceRange || "",
+        headings: headings.slice(0, 15),
         content: cleaned.substring(0, 4000),
       },
     });

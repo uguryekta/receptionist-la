@@ -264,7 +264,7 @@ export default function Dashboard() {
       const data = await res.json();
       const info = data.data;
 
-      // Auto-fill what we found
+      // Auto-fill form fields
       if (info.pageTitle && !form.businessName) {
         setForm((prev) => ({ ...prev, businessName: info.pageTitle.split('|')[0].split('-')[0].trim() }));
       }
@@ -274,23 +274,60 @@ export default function Dashboard() {
       if (info.phones?.length && !form.ownerPhone) {
         setForm((prev) => ({ ...prev, ownerPhone: info.phones[0] }));
       }
+
+      // Auto-fill template fields
       if (info.address) {
         setTemplateFields((prev) => ({ ...prev, address: info.address }));
       }
       if (info.hours) {
         setTemplateFields((prev) => ({ ...prev, hours: info.hours }));
       }
+      if (info.services?.length) {
+        setTemplateFields((prev) => ({
+          ...prev,
+          services: info.services.map((s) => `- ${s}`).join('\n'),
+        }));
+      }
+      if (info.industry) {
+        setTemplateFields((prev) => ({ ...prev, industry: info.industry }));
+      }
+      if (info.languages) {
+        setTemplateFields((prev) => ({ ...prev, languages: info.languages }));
+      }
+      if (info.paymentMethods) {
+        setTemplateFields((prev) => ({ ...prev, paymentMethods: info.paymentMethods }));
+      }
+      if (info.parking) {
+        setTemplateFields((prev) => ({ ...prev, parking: info.parking }));
+      }
+      if (info.serviceArea) {
+        setTemplateFields((prev) => ({ ...prev, serviceArea: info.serviceArea }));
+      }
+      if (info.aboutText || info.description) {
+        setTemplateFields((prev) => ({
+          ...prev,
+          specialNotes: prev.specialNotes
+            ? prev.specialNotes
+            : `About: ${info.aboutText || info.description}`,
+        }));
+      }
 
-      // Show the scraped content summary in a toast
+      // Show summary
       const found = [];
       if (info.pageTitle) found.push('business name');
       if (info.phones?.length) found.push('phone');
       if (info.emails?.length) found.push('email');
       if (info.address) found.push('address');
       if (info.hours) found.push('hours');
+      if (info.services?.length) found.push(`${info.services.length} services`);
+      if (info.industry) found.push('industry');
+      if (info.languages) found.push('languages');
+      if (info.paymentMethods) found.push('payments');
+      if (info.parking) found.push('parking');
+      if (info.aboutText) found.push('about info');
 
       if (found.length > 0) {
-        showToast(`Found: ${found.join(', ')}. Review and fill remaining fields, then generate the prompt.`);
+        showToast(`Website: Found ${found.join(', ')}. Review and generate the prompt!`);
         setShowTemplateHelper(true);
       } else {
         showToast('Could not extract structured info. You can still fill the template manually.', 'error');
