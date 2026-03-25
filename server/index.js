@@ -738,33 +738,147 @@ app.post("/api/scrape-google-maps", requireAuth, async (req, res) => {
 
     let targetUrl = url.trim();
 
-    // Follow redirects for short URLs (maps.app.goo.gl, goo.gl/maps, etc.)
-    // Fetch the Google Maps page
-    const response = await fetch(targetUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      redirect: "follow",
-      signal: AbortSignal.timeout(15000),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Google Maps returned status ${response.status}`);
+    // Short URLs (maps.app.goo.gl) use JS redirects that fetch() can't follow.
+    // Use a HEAD request with redirect: "manual" to capture the Location header.
+    if (/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(targetUrl)) {
+      try {
+        const headRes = await fetch(targetUrl, {
+          method: "HEAD",
+          redirect: "follow",
+          signal: AbortSignal.timeout(10000),
+        });
+        // The final URL after redirects
+        if (headRes.url && headRes.url.includes("google.com/maps")) {
+          targetUrl = headRes.url;
+        }
+      } catch (_) {
+        // If HEAD fails, try GET with manual redirect
+        try {
+          const getRes = await fetch(targetUrl, {
+            redirect: "manual",
+            signal: AbortSignal.timeout(10000),
+          });
+          const loc = getRes.headers.get("location");
+          if (loc && loc.includes("google.com/maps")) {
+            targetUrl = loc;
+          }
+        } catch (__) {
+          // Continue with original URL
+        }
+      }
     }
 
-    const html = await response.text();
+    // Extract info from the URL itself (works even if page fetch fails)
     const result = {};
 
-    // Extract business name from title or meta
-    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-    if (titleMatch) {
-      // Google Maps titles are like "Business Name - Google Maps"
-      const title = titleMatch[1].replace(/\s*[-–]\s*Google\s*Maps.*$/i, "").trim();
-      if (title && title !== "Google Maps") {
-        result.businessName = title;
+    // Extract business name from URL path: /maps/place/Business+Name/
+    const placeMatch = targetUrl.match(/\/maps\/place\/([^/@]+)/);
+    if (placeMatch) {
+      result.businessName = decodeURIComponent(placeMatch[1].replace(/\+/g, " "));
+    }
+
+    // Extract coordinates from URL
+    const coordMatch = targetUrl.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+    if (coordMatch) {
+      result.latitude = coordMatch[1];
+      result.longitude = coordMatch[2];
+    }
+
+    // Now fetch the actual Google Maps page for more details
+    let html = "";
+    try {
+      const response = await fetch(targetUrl, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      });
+      if (response.ok) {
+        html = await response.text();
+      }
+    } catch (_) {
+      // If page fetch fails, we still have URL-extracted data
+    }
+
+    // Extract business name from title or meta (override URL-extracted name if better)
+    if (html) {
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      if (titleMatch) {
+        const title = titleMatch[1].replace(/\s*[-–]\s*Google\s*Maps.*$/i, "").trim();
+        if (title && title !== "Google Maps") {
+          result.businessName = title;
+        }
+      }
+
+      // Try to extract from Google Maps embedded data arrays
+      // Google embeds business info in JS arrays like: ["Business Name",null,null,["address",...]]
+      const embeddedDataPatterns = [
+        // Phone number patterns in embedded data
+        /\["(\(\d{3}\)\s*\d{3}-\d{4})"\]/g,
+        /\["(\+1\s*\d{3}[-\s]\d{3}[-\s]\d{4})"\]/g,
+      ];
+      for (const pat of embeddedDataPatterns) {
+        const m = html.match(pat);
+        if (m && !result.phone) {
+          const phoneClean = m[0].replace(/[\[\]"]/g, "");
+          if (phoneClean.match(/\d/g)?.length >= 10) {
+            result.phone = phoneClean;
+          }
+        }
+      }
+
+      // Extract address from embedded data - look for street patterns in the raw HTML
+      if (!result.address) {
+        const addrInData = html.match(/"(\d+\s+[A-Za-z\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln|Lane|Ct|Court|Pl|Place)[^"]{0,80})"/i);
+        if (addrInData) result.address = addrInData[1].trim();
+      }
+
+      // Extract website from embedded data
+      if (!result.website) {
+        const webMatch = html.match(/"(https?:\/\/(?:www\.)?(?!google\.com|gstatic\.com|googleapis\.com|schema\.org)[a-zA-Z0-9][\w.-]+\.[a-z]{2,}(?:\/[^"]*)?)"(?!.*schema)/i);
+        if (webMatch && !webMatch[1].includes("schema.org")) result.website = webMatch[1];
+      }
+
+      // Extract hours from embedded data arrays
+      if (!result.hours) {
+        const hourStrings = [];
+        const dayPatterns = html.matchAll(/"((?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)[^"]{3,80})"/gi);
+        for (const dm of dayPatterns) {
+          if (/\d/.test(dm[1])) {
+            hourStrings.push(dm[1]);
+          }
+        }
+        if (hourStrings.length > 0) {
+          result.hours = [...new Set(hourStrings)].slice(0, 7).join("; ");
+        }
+      }
+
+      // Extract category/type from embedded data
+      if (!result.category) {
+        // Google Maps often has category near the business name in embedded arrays
+        const catPatterns = [
+          /Auto parts store|Auto repair shop|Tire shop|Car dealer|Gas station/i,
+          /Restaurant|Cafe|Bakery|Bar|Pizza|Coffee shop|Fast food/i,
+          /Hair salon|Beauty salon|Barber shop|Spa|Nail salon/i,
+          /Dentist|Doctor|Hospital|Clinic|Pharmacy|Medical/i,
+          /Law firm|Attorney|Lawyer|Accountant|Insurance/i,
+          /Gym|Fitness|Yoga|Pilates|Martial arts/i,
+          /Pet store|Veterinarian|Pet grooming/i,
+          /Plumber|Electrician|HVAC|Contractor|Handyman/i,
+          /Real estate|Property management/i,
+          /Hotel|Motel|Inn|Resort/i,
+        ];
+        for (const cp of catPatterns) {
+          const cm = html.match(new RegExp(`"(${cp.source}[^"]*)"`, "i"));
+          if (cm) {
+            result.category = cm[1];
+            break;
+          }
+        }
       }
     }
 
@@ -804,7 +918,7 @@ app.post("/api/scrape-google-maps", requireAuth, async (req, res) => {
     }
 
     // Fallback: extract from the page HTML content using common Google Maps patterns
-    const cleaned = html
+    const cleaned = (html || "")
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<[^>]+>/g, " ")
@@ -854,9 +968,13 @@ app.post("/api/scrape-google-maps", requireAuth, async (req, res) => {
       }
     }
 
-    return res.json({
-      success: true,
-      data: result,
+    // If we got at least a business name, consider it a success
+    if (result.businessName) {
+      return res.json({ success: true, data: result });
+    }
+
+    return res.status(404).json({
+      error: "Could not extract business info. Try pasting the full URL from your browser (e.g. https://www.google.com/maps/place/...).",
     });
   } catch (err) {
     console.error("Error scraping Google Maps:", err.message);
