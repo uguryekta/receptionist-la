@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import VapiModule from '@vapi-ai/web';
 const Vapi = VapiModule.default || VapiModule;
 
-const API_BASE = 'http://localhost:3001';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001';
 const VAPI_PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || '';
 
 function getAuthHeaders() {

@@ -18,7 +18,14 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
 
-app.use(cors({ origin: "http://localhost:5173" }));
+app.use(cors({
+  origin: [
+    "http://localhost:5173",
+    "https://receptionistla.com",
+    "https://www.receptionistla.com",
+    "https://receptionistla.netlify.app"
+  ]
+}));
 app.use(express.json());
 
 const vapi = new VapiClient({ token: process.env.VAPI_API_KEY });
