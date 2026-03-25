@@ -6,7 +6,7 @@ const plans = [
     price: '699',
     desc: 'Everything you need to never miss a call.',
     features: [
-      '300 minutes per month',
+      '1,500 minutes per month included',
       '24/7 call answering',
       'FAQ handling',
       'Call summaries via text message',
