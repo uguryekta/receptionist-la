@@ -494,6 +494,147 @@ app.post("/api/scrape-website", requireAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/scrape-google-maps - Extract business info from Google Maps
+// ---------------------------------------------------------------------------
+app.post("/api/scrape-google-maps", requireAuth, async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) {
+      return res.status(400).json({ error: "Google Maps URL is required" });
+    }
+
+    let targetUrl = url.trim();
+
+    // Follow redirects for short URLs (maps.app.goo.gl, goo.gl/maps, etc.)
+    // Fetch the Google Maps page
+    const response = await fetch(targetUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Google Maps returned status ${response.status}`);
+    }
+
+    const html = await response.text();
+    const result = {};
+
+    // Extract business name from title or meta
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    if (titleMatch) {
+      // Google Maps titles are like "Business Name - Google Maps"
+      const title = titleMatch[1].replace(/\s*[-–]\s*Google\s*Maps.*$/i, "").trim();
+      if (title && title !== "Google Maps") {
+        result.businessName = title;
+      }
+    }
+
+    // Try to extract from structured data (JSON-LD)
+    const jsonLdMatches = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+    for (const match of jsonLdMatches) {
+      try {
+        const jsonStr = match.replace(/<script[^>]*>/i, "").replace(/<\/script>/i, "").trim();
+        const data = JSON.parse(jsonStr);
+        if (data.name) result.businessName = data.name;
+        if (data.address) {
+          const addr = data.address;
+          if (typeof addr === "string") {
+            result.address = addr;
+          } else if (addr.streetAddress) {
+            result.address = [addr.streetAddress, addr.addressLocality, addr.addressRegion, addr.postalCode]
+              .filter(Boolean)
+              .join(", ");
+          }
+        }
+        if (data.telephone) result.phone = data.telephone;
+        if (data.url) result.website = data.url;
+        if (data.openingHours) {
+          result.hours = Array.isArray(data.openingHours)
+            ? data.openingHours.join(", ")
+            : data.openingHours;
+        }
+        if (data.servesCuisine || data["@type"]) {
+          result.category = data.servesCuisine || data["@type"];
+        }
+        if (data.aggregateRating?.ratingValue) {
+          result.rating = `${data.aggregateRating.ratingValue}/5 (${data.aggregateRating.reviewCount || "?"} reviews)`;
+        }
+      } catch (_) {
+        // Skip invalid JSON-LD
+      }
+    }
+
+    // Fallback: extract from the page HTML content using common Google Maps patterns
+    const cleaned = html
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Try to find address if not from JSON-LD
+    if (!result.address) {
+      const addrMatch = cleaned.match(/(\d+\s+[\w\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln|Lane|Ct|Court|Pl|Place)[^,]*,\s*[A-Za-z\s]+,\s*[A-Z]{2}\s*\d{5})/i);
+      if (addrMatch) result.address = addrMatch[1].trim();
+    }
+
+    // Try to find phone if not from JSON-LD
+    if (!result.phone) {
+      const phoneMatch = cleaned.match(/(\(\d{3}\)\s*\d{3}[-.]?\d{4}|\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/);
+      if (phoneMatch) result.phone = phoneMatch[1].trim();
+    }
+
+    // Try to find hours from common patterns
+    if (!result.hours) {
+      // Look for day-time patterns
+      const hoursMatch = cleaned.match(/((?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[\w]*[\s:]+\d{1,2}[:\d]*\s*(?:AM|PM|am|pm)[\s\S]{0,200})/i);
+      if (hoursMatch) {
+        result.hours = hoursMatch[1].substring(0, 200).trim();
+      }
+    }
+
+    // Try to find category/type
+    if (!result.category) {
+      const catMatch = cleaned.match(/(?:Category|Type)[\s:]+([A-Za-z\s&,]+?)(?:\.|,|\n|$)/i);
+      if (catMatch) result.category = catMatch[1].trim();
+    }
+
+    // Extract rating if available
+    if (!result.rating) {
+      const ratingMatch = cleaned.match(/(\d\.\d)\s*(?:stars?|out of 5|\([\d,]+\s*reviews?\))/i);
+      if (ratingMatch) result.rating = ratingMatch[0].trim();
+    }
+
+    // Try to determine service area from address
+    if (result.address && !result.serviceArea) {
+      const cityMatch = result.address.match(/,\s*([A-Za-z\s]+),\s*[A-Z]{2}/);
+      if (cityMatch) {
+        result.serviceArea = `${cityMatch[1].trim()} and surrounding areas`;
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: result,
+    });
+  } catch (err) {
+    console.error("Error scraping Google Maps:", err.message);
+    return res.status(500).json({
+      error: "Failed to fetch Google Maps info",
+      details: err.message,
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Start server
 // ---------------------------------------------------------------------------
 app.listen(PORT, () => {

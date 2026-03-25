@@ -163,8 +163,10 @@ export default function Dashboard() {
     ownerName: '',
     areaCode: '213',
     websiteUrl: '',
+    googleMapsUrl: '',
     masterPrompt: '',
   });
+  const [scrapingMaps, setScrapingMaps] = useState(false);
 
   // Template helper fields
   const [templateFields, setTemplateFields] = useState({
@@ -301,6 +303,71 @@ export default function Dashboard() {
     }
   };
 
+  // Pull info from Google Maps
+  const handleScrapeMaps = async () => {
+    if (!form.googleMapsUrl) {
+      showToast('Please enter a Google Maps URL first.', 'error');
+      return;
+    }
+    setScrapingMaps(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/scrape-google-maps`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ url: form.googleMapsUrl }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to fetch Google Maps info');
+      }
+      const data = await res.json();
+      const info = data.data;
+
+      // Auto-fill what we found
+      if (info.businessName && !form.businessName) {
+        setForm((prev) => ({ ...prev, businessName: info.businessName }));
+      }
+      if (info.phone && !form.ownerPhone) {
+        setForm((prev) => ({ ...prev, ownerPhone: info.phone }));
+      }
+      if (info.address) {
+        setTemplateFields((prev) => ({ ...prev, address: info.address }));
+      }
+      if (info.hours) {
+        setTemplateFields((prev) => ({ ...prev, hours: info.hours }));
+      }
+      if (info.category) {
+        setTemplateFields((prev) => ({ ...prev, industry: info.category }));
+      }
+      if (info.website && !form.websiteUrl) {
+        setForm((prev) => ({ ...prev, websiteUrl: info.website }));
+      }
+      if (info.serviceArea) {
+        setTemplateFields((prev) => ({ ...prev, serviceArea: info.serviceArea }));
+      }
+
+      const found = [];
+      if (info.businessName) found.push('business name');
+      if (info.phone) found.push('phone');
+      if (info.address) found.push('address');
+      if (info.hours) found.push('hours');
+      if (info.category) found.push('industry');
+      if (info.website) found.push('website');
+      if (info.rating) found.push(`rating (${info.rating})`);
+
+      if (found.length > 0) {
+        showToast(`Google Maps: Found ${found.join(', ')}. Review and generate the prompt.`);
+        setShowTemplateHelper(true);
+      } else {
+        showToast('Could not extract info from Google Maps. Try pasting the full URL from your browser.', 'error');
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setScrapingMaps(false);
+    }
+  };
+
   // Generate prompt from template
   const handleGeneratePrompt = () => {
     const prompt = generateMasterPrompt({
@@ -335,7 +402,7 @@ export default function Dashboard() {
       }
       const data = await res.json();
       setAgents((prev) => [...prev, data.agent]);
-      setForm({ businessName: '', ownerEmail: '', ownerPhone: '', ownerName: '', areaCode: '213', websiteUrl: '', masterPrompt: '' });
+      setForm({ businessName: '', ownerEmail: '', ownerPhone: '', ownerName: '', areaCode: '213', websiteUrl: '', googleMapsUrl: '', masterPrompt: '' });
       setTemplateFields({
         industry: '', address: '', serviceArea: 'Los Angeles area',
         hours: 'Monday through Friday, 9:00 AM to 6:00 PM', services: '',
@@ -485,6 +552,31 @@ export default function Dashboard() {
                   disabled={scraping}
                 >
                   {scraping ? 'Pulling...' : 'Pull Info from Website'}
+                </button>
+              </div>
+
+              {/* Google Maps URL + Pull Info */}
+              <div className="website-pull-row">
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label htmlFor="googleMapsUrl">Google Maps URL</label>
+                  <input
+                    id="googleMapsUrl"
+                    name="googleMapsUrl"
+                    type="url"
+                    className="form-input"
+                    placeholder="https://maps.google.com/maps?cid=... or search URL"
+                    value={form.googleMapsUrl}
+                    onChange={handleChange}
+                  />
+                  <span className="form-help">Paste the Google Maps link for the business to pull address, hours, category, rating, and more.</span>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-pull-info"
+                  onClick={handleScrapeMaps}
+                  disabled={scrapingMaps}
+                >
+                  {scrapingMaps ? 'Pulling...' : 'Pull Info from Maps'}
                 </button>
               </div>
 
