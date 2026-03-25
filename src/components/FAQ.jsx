@@ -8,7 +8,7 @@ const faqs = [
   },
   {
     q: 'How long does setup take?',
-    a: 'We handle everything for you. Our team visits your business in person to learn how you operate, then we build and configure your custom AI receptionist. Most businesses are live within a few days.',
+    a: 'We handle everything for you. Our team visits your business in person to learn how you operate, then we build and configure your custom AI receptionist. Most businesses are live within the same day!',
   },
   {
     q: 'Will the AI sound robotic?',
@@ -23,8 +23,8 @@ const faqs = [
     a: 'Absolutely. During our in-person onboarding, we work with you to define exactly how calls should be handled — from greetings to FAQs to booking flows. Everything is tailored to your business.',
   },
   {
-    q: 'What counts toward my 300 minutes?',
-    a: 'Only active call time counts toward your minutes. Hold time, ringing, and voicemail do not count. Most small businesses find 300 minutes more than enough for their monthly call volume.',
+    q: 'What counts toward my 1,500 minutes?',
+    a: 'Only active call time counts toward your minutes. Hold time, ringing, and voicemail do not count. Most small businesses find 1,500 minutes more than enough for their monthly call volume.',
   },
   {
     q: 'Can I cancel anytime?',

@@ -18,8 +18,8 @@ function LandingPage() {
       <Navbar />
       <Hero />
       <Features />
-      <Industries />
       <HowItWorks />
+      <Industries />
       <Pricing />
       <FAQ />
       <CTA />
