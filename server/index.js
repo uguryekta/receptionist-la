@@ -401,6 +401,99 @@ app.delete("/api/agents/:id", requireAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// POST /api/scrape-website - Fetch & extract business info from a website
+// ---------------------------------------------------------------------------
+app.post("/api/scrape-website", requireAuth, async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url) {
+      return res.status(400).json({ error: "URL is required" });
+    }
+
+    // Normalize URL
+    let targetUrl = url.trim();
+    if (!targetUrl.startsWith("http")) {
+      targetUrl = "https://" + targetUrl;
+    }
+
+    // Fetch the website HTML
+    const response = await fetch(targetUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; ReceptionistLA/1.0)",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Website returned status ${response.status}`);
+    }
+
+    const html = await response.text();
+
+    // Extract useful text content (strip HTML tags, scripts, styles)
+    const cleaned = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<nav[\s\S]*?<\/nav>/gi, "")
+      .replace(/<footer[\s\S]*?<\/footer>/gi, "")
+      .replace(/<header[\s\S]*?<\/header>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&#\d+;/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .substring(0, 8000); // Limit to 8000 chars
+
+    // Extract meta description
+    const metaDescMatch = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i);
+    const metaDesc = metaDescMatch ? metaDescMatch[1] : "";
+
+    // Extract title
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const pageTitle = titleMatch ? titleMatch[1].trim() : "";
+
+    // Try to find phone numbers
+    const phoneMatches = cleaned.match(/(\+?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/g) || [];
+    const phones = [...new Set(phoneMatches)].slice(0, 3);
+
+    // Try to find email addresses
+    const emailMatches = cleaned.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+    const emails = [...new Set(emailMatches)].slice(0, 3);
+
+    // Try to find address patterns
+    const addressMatch = cleaned.match(/\d+\s+[\w\s]+(?:St|Street|Ave|Avenue|Blvd|Boulevard|Dr|Drive|Rd|Road|Way|Ln|Lane|Ct|Court|Pl|Place)[.,]?\s*(?:Suite|Ste|#|Apt)?\s*\d*[.,]?\s*(?:Los Angeles|LA|Hollywood|Beverly Hills|Santa Monica|Pasadena|Burbank|Glendale|Long Beach|Torrance|Culver City|West Hollywood|Venice|Sherman Oaks|Encino|Tarzana|Woodland Hills|Northridge|Van Nuys|Studio City|North Hollywood|Koreatown|Downtown|Echo Park|Silver Lake|Los Feliz|Highland Park|Eagle Rock|Atwater Village|Glassell Park|Mount Washington)[.,]?\s*(?:CA|California)?\s*\d{0,5}/i);
+    const address = addressMatch ? addressMatch[0].trim() : "";
+
+    // Try to find hours
+    const hoursPatterns = cleaned.match(/(?:hours|open|schedule|we're open|we are open)[:\s]*([^.]{10,150})/i);
+    const hours = hoursPatterns ? hoursPatterns[1].trim() : "";
+
+    return res.json({
+      success: true,
+      data: {
+        pageTitle,
+        metaDescription: metaDesc,
+        phones,
+        emails,
+        address,
+        hours,
+        content: cleaned.substring(0, 4000),
+      },
+    });
+  } catch (err) {
+    console.error("Error scraping website:", err.message);
+    return res.status(500).json({
+      error: "Failed to fetch website info",
+      details: err.message,
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Start server
 // ---------------------------------------------------------------------------
 app.listen(PORT, () => {

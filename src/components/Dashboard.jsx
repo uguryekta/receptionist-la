@@ -28,6 +28,120 @@ function Toast({ message, type, onClose }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Master Prompt Template Generator
+// ---------------------------------------------------------------------------
+function generateMasterPrompt(info) {
+  const biz = info.businessName || '[Business Name]';
+  const industry = info.industry || '[Industry]';
+  const addr = info.address || '[Address]';
+  const hours = info.hours || 'Monday through Friday, 9:00 AM to 6:00 PM';
+  const services = info.services || '[List of services]';
+  const languages = info.languages || 'English';
+  const website = info.websiteUrl || '[website URL]';
+  const email = info.ownerEmail || '[email]';
+  const ownerName = info.ownerName || '[Owner Name]';
+  const specialNotes = info.specialNotes || '';
+  const parking = info.parking || '';
+  const paymentMethods = info.paymentMethods || 'cash, credit cards, and debit cards';
+  const cancellation = info.cancellationPolicy || '';
+  const serviceArea = info.serviceArea || 'Los Angeles area';
+
+  return `## ROLE & IDENTITY
+You are the professional AI receptionist for ${biz}, a ${industry} located at ${addr}, serving the ${serviceArea}. Your name is "the receptionist" — never claim to be a human. If asked, say you are an AI assistant for ${biz}.
+
+## PERSONALITY & TONE
+- Warm, friendly, and genuinely helpful — like a great front desk person who cares
+- Professional but conversational — never robotic or overly formal
+- Patient with callers — never rush them, never show frustration
+- Confident when providing information you know; honest when you don't
+- Mirror the caller's energy — upbeat with upbeat callers, calm and reassuring with concerned callers
+
+## BUSINESS INFORMATION
+- **Business Name:** ${biz}
+- **Industry:** ${industry}
+- **Address:** ${addr}
+- **Service Area:** ${serviceArea}
+- **Business Hours:** ${hours}
+- **Phone:** [Business Phone]
+- **Email:** ${email}
+- **Website:** ${website}
+- **Owner/Manager:** ${ownerName}
+${parking ? `- **Parking:** ${parking}` : ''}
+${paymentMethods ? `- **Payment Methods:** ${paymentMethods}` : ''}
+
+## SERVICES OFFERED
+${services}
+
+## LANGUAGES
+${languages}
+
+## CORE RESPONSIBILITIES (in priority order)
+
+### 1. Answer Questions About the Business
+- Provide accurate information about services, hours, location, and pricing ONLY if explicitly included above
+- If a caller asks about something NOT covered in this prompt, say: "That's a great question. I don't have that specific information right now, but I'd be happy to take your name and number so ${ownerName || 'the team'} can get back to you with the answer."
+- NEVER make up prices, availability, wait times, or any other information
+
+### 2. Help With Appointments/Bookings
+- Collect: caller's full name, phone number, preferred date/time, and service needed
+- Confirm all details back to the caller before ending
+- Say: "I've noted your appointment request. ${ownerName || 'The team'} will confirm your appointment shortly."
+- If asked about specific availability, say: "Let me take your preferred time and ${ownerName || 'the team'} will confirm if that slot is available."
+
+### 3. Take Messages
+- When the caller wants to reach ${ownerName || 'someone specific'}, collect:
+  - Caller's full name
+  - Phone number
+  - Brief reason for the call
+- Say: "I'll make sure ${ownerName || 'they'} gets your message and calls you back as soon as possible."
+
+### 4. Handle Urgent Matters
+- If a caller describes an emergency or urgent issue, say: "I understand this is urgent. Let me take your information right away so ${ownerName || 'the team'} can prioritize getting back to you."
+- Collect their name, number, and brief description of the urgency
+
+## WHAT YOU MUST NEVER DO
+1. **Never fabricate information** — If it's not in this prompt, you don't know it. Say so honestly.
+2. **Never provide medical, legal, or financial advice** — Always direct to the appropriate professional.
+3. **Never confirm appointments** — You take requests; the team confirms.
+4. **Never share personal information** about the owner, employees, or other customers.
+5. **Never discuss pricing** unless specific prices are listed above. Say: "Pricing can vary depending on your specific needs. I'd recommend speaking with ${ownerName || 'the team'} for an accurate quote."
+6. **Never argue** with a caller. If someone is upset, empathize and offer to take a message.
+7. **Never say "I'm just an AI"** dismissively — instead say "I'm the AI receptionist for ${biz}, and I'm here to help."
+
+## HANDLING COMMON SCENARIOS
+
+**Caller asks about hours:**
+Provide the hours listed above. If they ask about holidays, say: "Our regular hours are [hours]. For holiday hours, I'd recommend checking our website at ${website} or I can have ${ownerName || 'the team'} get back to you."
+
+**Caller asks for directions:**
+Provide the address: ${addr}. ${parking ? `Parking info: ${parking}` : 'If they ask about parking, offer to have the team call back with details.'}
+
+**Caller wants a price quote:**
+Only share prices if they are explicitly listed above. Otherwise: "Pricing depends on the specific service and your individual needs. I'd love to set up a time for you to discuss this with ${ownerName || 'our team'} directly."
+
+**Caller asks if you're a real person:**
+"I'm an AI receptionist for ${biz}. I'm here to help you with information, appointments, and messages. How can I assist you?"
+
+**Caller speaks a language you support:**
+Respond in their language if it's listed in your supported languages: ${languages}.
+
+**After-hours call:**
+"Thank you for calling ${biz}. Our business hours are ${hours}. I'd be happy to take a message, and ${ownerName || 'the team'} will get back to you during business hours."
+
+${cancellation ? `**Cancellation/Rescheduling:**\n${cancellation}` : ''}
+
+${specialNotes ? `## ADDITIONAL NOTES\n${specialNotes}` : ''}
+
+## CALL FLOW
+1. **Greet** warmly: "Hello! Thank you for calling ${biz}. How can I help you today?"
+2. **Listen** carefully to the caller's needs
+3. **Respond** with accurate information from this prompt only
+4. **Collect info** if needed (name, number, message, appointment details)
+5. **Confirm** all collected information back to the caller
+6. **Close** professionally: "Is there anything else I can help you with? ... Thank you for calling ${biz}. Have a wonderful day!"`;
+}
+
 export default function Dashboard() {
   const navigate = useNavigate();
   const [agents, setAgents] = useState([]);
@@ -38,14 +152,32 @@ export default function Dashboard() {
   const [editingId, setEditingId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [activeCallId, setActiveCallId] = useState(null);
+  const [scraping, setScraping] = useState(false);
+  const [showTemplateHelper, setShowTemplateHelper] = useState(false);
   const vapiRef = useRef(null);
 
   const [form, setForm] = useState({
     businessName: '',
     ownerEmail: '',
     ownerPhone: '',
+    ownerName: '',
     areaCode: '213',
+    websiteUrl: '',
     masterPrompt: '',
+  });
+
+  // Template helper fields
+  const [templateFields, setTemplateFields] = useState({
+    industry: '',
+    address: '',
+    serviceArea: 'Los Angeles area',
+    hours: 'Monday through Friday, 9:00 AM to 6:00 PM',
+    services: '',
+    languages: 'English',
+    parking: '',
+    paymentMethods: 'Cash, credit cards, debit cards',
+    cancellationPolicy: '',
+    specialNotes: '',
   });
 
   const [editForm, setEditForm] = useState({
@@ -106,6 +238,82 @@ export default function Dashboard() {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
+  const handleTemplateChange = (e) => {
+    setTemplateFields((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
+  // Pull info from website
+  const handleScrapeWebsite = async () => {
+    if (!form.websiteUrl) {
+      showToast('Please enter a website URL first.', 'error');
+      return;
+    }
+    setScraping(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/scrape-website`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ url: form.websiteUrl }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to fetch website');
+      }
+      const data = await res.json();
+      const info = data.data;
+
+      // Auto-fill what we found
+      if (info.pageTitle && !form.businessName) {
+        setForm((prev) => ({ ...prev, businessName: info.pageTitle.split('|')[0].split('-')[0].trim() }));
+      }
+      if (info.emails?.length && !form.ownerEmail) {
+        setForm((prev) => ({ ...prev, ownerEmail: info.emails[0] }));
+      }
+      if (info.phones?.length && !form.ownerPhone) {
+        setForm((prev) => ({ ...prev, ownerPhone: info.phones[0] }));
+      }
+      if (info.address) {
+        setTemplateFields((prev) => ({ ...prev, address: info.address }));
+      }
+      if (info.hours) {
+        setTemplateFields((prev) => ({ ...prev, hours: info.hours }));
+      }
+
+      // Show the scraped content summary in a toast
+      const found = [];
+      if (info.pageTitle) found.push('business name');
+      if (info.phones?.length) found.push('phone');
+      if (info.emails?.length) found.push('email');
+      if (info.address) found.push('address');
+      if (info.hours) found.push('hours');
+
+      if (found.length > 0) {
+        showToast(`Found: ${found.join(', ')}. Review and fill remaining fields, then generate the prompt.`);
+        setShowTemplateHelper(true);
+      } else {
+        showToast('Could not extract structured info. You can still fill the template manually.', 'error');
+        setShowTemplateHelper(true);
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setScraping(false);
+    }
+  };
+
+  // Generate prompt from template
+  const handleGeneratePrompt = () => {
+    const prompt = generateMasterPrompt({
+      businessName: form.businessName,
+      ownerEmail: form.ownerEmail,
+      ownerName: form.ownerName,
+      websiteUrl: form.websiteUrl,
+      ...templateFields,
+    });
+    setForm((prev) => ({ ...prev, masterPrompt: prompt }));
+    showToast('Master prompt generated! Review and customize it below.');
+  };
+
   const handleCreate = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -127,8 +335,15 @@ export default function Dashboard() {
       }
       const data = await res.json();
       setAgents((prev) => [...prev, data.agent]);
-      setForm({ businessName: '', ownerEmail: '', ownerPhone: '', areaCode: '213', masterPrompt: '' });
+      setForm({ businessName: '', ownerEmail: '', ownerPhone: '', ownerName: '', areaCode: '213', websiteUrl: '', masterPrompt: '' });
+      setTemplateFields({
+        industry: '', address: '', serviceArea: 'Los Angeles area',
+        hours: 'Monday through Friday, 9:00 AM to 6:00 PM', services: '',
+        languages: 'English', parking: '', paymentMethods: 'Cash, credit cards, debit cards',
+        cancellationPolicy: '', specialNotes: '',
+      });
       setShowForm(false);
+      setShowTemplateHelper(false);
       showToast('AI Agent created successfully!');
     } catch (err) {
       showToast(err.message, 'error');
@@ -246,11 +461,36 @@ export default function Dashboard() {
             <div className="dashboard-card" style={{ marginBottom: '32px' }}>
               <h2 className="card-title">Create New Agent</h2>
               <p className="card-desc">
-                Fill out the details below to set up a new AI receptionist.
+                Enter the customer's website to auto-fill details, or fill manually.
               </p>
+
+              {/* Website URL + Pull Info */}
+              <div className="website-pull-row">
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label htmlFor="websiteUrl">Customer Website URL</label>
+                  <input
+                    id="websiteUrl"
+                    name="websiteUrl"
+                    type="url"
+                    className="form-input"
+                    placeholder="https://www.example.com"
+                    value={form.websiteUrl}
+                    onChange={handleChange}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-pull-info"
+                  onClick={handleScrapeWebsite}
+                  disabled={scraping}
+                >
+                  {scraping ? 'Pulling...' : 'Pull Info from Website'}
+                </button>
+              </div>
+
               <form onSubmit={handleCreate} className="dashboard-form create-form-grid">
                 <div className="form-group">
-                  <label htmlFor="businessName">Business Name</label>
+                  <label htmlFor="businessName">Business Name *</label>
                   <input
                     id="businessName"
                     name="businessName"
@@ -263,7 +503,19 @@ export default function Dashboard() {
                   />
                 </div>
                 <div className="form-group">
-                  <label htmlFor="ownerEmail">Owner Email</label>
+                  <label htmlFor="ownerName">Owner / Manager Name</label>
+                  <input
+                    id="ownerName"
+                    name="ownerName"
+                    type="text"
+                    className="form-input"
+                    placeholder="e.g. Maria Garcia"
+                    value={form.ownerName}
+                    onChange={handleChange}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="ownerEmail">Owner Email *</label>
                   <input
                     id="ownerEmail"
                     name="ownerEmail"
@@ -276,7 +528,7 @@ export default function Dashboard() {
                   />
                 </div>
                 <div className="form-group">
-                  <label htmlFor="ownerPhone">Owner's Cell Phone</label>
+                  <label htmlFor="ownerPhone">Owner's Cell Phone *</label>
                   <input
                     id="ownerPhone"
                     name="ownerPhone"
@@ -300,18 +552,176 @@ export default function Dashboard() {
                     onChange={handleChange}
                   />
                 </div>
+
+                {/* Template Helper Toggle */}
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-template-toggle"
+                    onClick={() => setShowTemplateHelper(!showTemplateHelper)}
+                  >
+                    {showTemplateHelper ? 'Hide Prompt Builder' : 'Open Prompt Builder (Recommended)'}
+                  </button>
+                </div>
+
+                {/* Template Helper Fields */}
+                {showTemplateHelper && (
+                  <div className="template-helper" style={{ gridColumn: '1 / -1' }}>
+                    <div className="template-helper-header">
+                      <h3>Prompt Builder</h3>
+                      <p>Fill in the details below and click "Generate Master Prompt" to create a professional prompt.</p>
+                    </div>
+                    <div className="template-grid">
+                      <div className="form-group">
+                        <label htmlFor="industry">Industry / Business Type *</label>
+                        <input
+                          id="industry"
+                          name="industry"
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. Hair salon, Law firm, Dental office, Auto repair"
+                          value={templateFields.industry}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="address">Business Address</label>
+                        <input
+                          id="address"
+                          name="address"
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. 1234 Sunset Blvd, Los Angeles, CA 90028"
+                          value={templateFields.address}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="serviceArea">Service Area</label>
+                        <input
+                          id="serviceArea"
+                          name="serviceArea"
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. West Hollywood and surrounding areas"
+                          value={templateFields.serviceArea}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="hours">Business Hours</label>
+                        <input
+                          id="hours"
+                          name="hours"
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. Mon-Fri 9am-6pm, Sat 10am-4pm, Sun Closed"
+                          value={templateFields.hours}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="languages">Languages Supported</label>
+                        <input
+                          id="languages"
+                          name="languages"
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. English, Spanish, Korean"
+                          value={templateFields.languages}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="paymentMethods">Payment Methods</label>
+                        <input
+                          id="paymentMethods"
+                          name="paymentMethods"
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. Cash, credit cards, Apple Pay, Zelle"
+                          value={templateFields.paymentMethods}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="parking">Parking Info</label>
+                        <input
+                          id="parking"
+                          name="parking"
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. Free parking behind the building, street parking available"
+                          value={templateFields.parking}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label htmlFor="services">Services Offered (one per line)</label>
+                        <textarea
+                          id="services"
+                          name="services"
+                          className="form-textarea"
+                          rows={4}
+                          placeholder={"e.g.\n- Haircuts (men's and women's)\n- Color and highlights\n- Blowouts and styling\n- Keratin treatments"}
+                          value={templateFields.services}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label htmlFor="cancellationPolicy">Cancellation / Rescheduling Policy</label>
+                        <textarea
+                          id="cancellationPolicy"
+                          name="cancellationPolicy"
+                          className="form-textarea"
+                          rows={2}
+                          placeholder="e.g. Please cancel or reschedule at least 24 hours in advance to avoid a cancellation fee."
+                          value={templateFields.cancellationPolicy}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                        <label htmlFor="specialNotes">Special Notes / Custom Instructions</label>
+                        <textarea
+                          id="specialNotes"
+                          name="specialNotes"
+                          className="form-textarea"
+                          rows={3}
+                          placeholder={"e.g.\n- We are currently offering 20% off for first-time customers\n- We don't accept walk-ins on Saturdays\n- Ask callers how they heard about us"}
+                          value={templateFields.specialNotes}
+                          onChange={handleTemplateChange}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-generate"
+                      onClick={handleGeneratePrompt}
+                    >
+                      Generate Master Prompt
+                    </button>
+                  </div>
+                )}
+
+                {/* Master Prompt */}
                 <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                  <label htmlFor="masterPrompt">Master Prompt</label>
+                  <label htmlFor="masterPrompt">
+                    Master Prompt *
+                    <span className="label-hint"> — Generated or custom. This is the AI's brain.</span>
+                  </label>
                   <textarea
                     id="masterPrompt"
                     name="masterPrompt"
-                    className="form-textarea"
-                    rows={4}
-                    placeholder='You are the receptionist for [Business Name], a hair salon in Los Angeles. Our hours are Mon-Sat 9am-7pm...'
+                    className="form-textarea form-textarea-large"
+                    rows={16}
+                    placeholder='Use the Prompt Builder above to generate a comprehensive prompt, or write your own...'
                     value={form.masterPrompt}
                     onChange={handleChange}
                     required
                   />
+                  <div className="prompt-char-count">
+                    {form.masterPrompt.length} characters
+                  </div>
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>
                   <button
@@ -392,8 +802,8 @@ export default function Dashboard() {
                       <div className="form-group">
                         <label>Master Prompt</label>
                         <textarea
-                          className="form-textarea"
-                          rows={5}
+                          className="form-textarea form-textarea-large"
+                          rows={12}
                           value={editForm.masterPrompt}
                           onChange={(e) => setEditForm((prev) => ({ ...prev, masterPrompt: e.target.value }))}
                         />
@@ -428,7 +838,7 @@ export default function Dashboard() {
                   <div className="agent-card-actions">
                     {activeCallId === agent.assistantId ? (
                       <button className="btn btn-on-call" onClick={endTestCall}>
-                        🔴 End Call
+                        End Call
                       </button>
                     ) : (
                       <button
@@ -436,7 +846,7 @@ export default function Dashboard() {
                         onClick={() => startTestCall(agent.assistantId)}
                         disabled={!!activeCallId}
                       >
-                        🎙️ Test Call
+                        Test Call
                       </button>
                     )}
                     {editingId !== agent.id && (
