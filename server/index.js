@@ -4,7 +4,13 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import { VapiClient } from "@vapi-ai/server-sdk";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -17,8 +23,36 @@ app.use(express.json());
 
 const vapi = new VapiClient({ token: process.env.VAPI_API_KEY });
 
-// TODO: Replace with database
+// ---------------------------------------------------------------------------
+// Persistent file-based agent storage
+// ---------------------------------------------------------------------------
+const AGENTS_FILE = path.join(__dirname, "agents.json");
 const agents = new Map();
+
+function loadAgents() {
+  try {
+    if (fs.existsSync(AGENTS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf-8"));
+      for (const agent of data) {
+        agents.set(agent.id, agent);
+      }
+      console.log(`Loaded ${agents.size} agent(s) from disk.`);
+    }
+  } catch (err) {
+    console.error("Error loading agents from disk:", err.message);
+  }
+}
+
+function saveAgents() {
+  try {
+    const data = Array.from(agents.values());
+    fs.writeFileSync(AGENTS_FILE, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error("Error saving agents to disk:", err.message);
+  }
+}
+
+loadAgents();
 
 // ---------------------------------------------------------------------------
 // Auth: Users store (TODO: Replace with database)
@@ -236,6 +270,7 @@ app.post("/api/agents", requireAuth, async (req, res) => {
     };
 
     agents.set(agent.id, agent);
+    saveAgents();
 
     return res.status(201).json({ agent });
   } catch (err) {
@@ -301,6 +336,7 @@ app.patch("/api/agents/:id", requireAuth, async (req, res) => {
     }
 
     agents.set(agent.id, agent);
+    saveAgents();
 
     return res.json({ agent });
   } catch (err) {
@@ -346,6 +382,7 @@ app.delete("/api/agents/:id", requireAuth, async (req, res) => {
     }
 
     agents.delete(agent.id);
+    saveAgents();
 
     return res.json({ success: true });
   } catch (err) {

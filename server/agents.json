@@ -1,0 +1,14 @@
+[
+  {
+    "id": "seed-chichileta-001",
+    "assistantId": "871fa2c2-9442-4922-ab52-b98835ea66f7",
+    "phoneNumberId": "0cc702f4-da4f-41cd-80e3-26fba6ca06c0",
+    "twilioNumber": "+18444922681",
+    "twilioNumberSid": null,
+    "businessName": "Chichileta Baby",
+    "ownerPhone": "+15304076816",
+    "masterPrompt": "You are the receptionist for organic baby clothing brand, Chichileta Baby.\n\nOperating hours: 9 am to 5 pm from Monday to Friday.\nShipment: You ship in 1 business day.\nProducts: Organic Cotton Ribbed Baby Romper - $30",
+    "ownerEmail": "burcumusaoglu91@gmail.com",
+    "createdAt": "2026-03-25T07:05:36.932Z"
+  }
+]
