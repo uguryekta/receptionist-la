@@ -1,10 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import VapiModule from '@vapi-ai/web';
 const Vapi = VapiModule.default || VapiModule;
 
 const API_BASE = 'http://localhost:3001';
 const VAPI_PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || '';
+
+function getAuthHeaders() {
+  const token = localStorage.getItem('token');
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
 
 function Toast({ message, type, onClose }) {
   useEffect(() => {
@@ -21,12 +29,16 @@ function Toast({ message, type, onClose }) {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(true);
-  const [editing, setEditing] = useState(false);
   const [toast, setToast] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [activeCallId, setActiveCallId] = useState(null);
+  const vapiRef = useRef(null);
 
   const [form, setForm] = useState({
     businessName: '',
@@ -36,10 +48,36 @@ export default function Dashboard() {
     masterPrompt: '',
   });
 
-  const [editPrompt, setEditPrompt] = useState('');
-  const [editOwnerPhone, setEditOwnerPhone] = useState('');
-  const [onCall, setOnCall] = useState(false);
-  const vapiRef = useRef(null);
+  const [editForm, setEditForm] = useState({
+    masterPrompt: '',
+    ownerPhone: '',
+  });
+
+  // Check auth on mount
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login');
+      return;
+    }
+    fetch(`${API_BASE}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((res) => {
+      if (!res.ok) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        navigate('/login');
+      }
+    }).catch(() => {
+      navigate('/login');
+    });
+  }, [navigate]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    navigate('/login');
+  };
 
   const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type });
@@ -47,7 +85,9 @@ export default function Dashboard() {
 
   const fetchAgents = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/agents`);
+      const res = await fetch(`${API_BASE}/api/agents`, {
+        headers: getAuthHeaders(),
+      });
       if (!res.ok) throw new Error('Failed to fetch agents');
       const data = await res.json();
       setAgents(data.agents || []);
@@ -72,7 +112,7 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_BASE}/api/agents`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           businessName: form.businessName,
           ownerEmail: form.ownerEmail,
@@ -88,6 +128,7 @@ export default function Dashboard() {
       const data = await res.json();
       setAgents((prev) => [...prev, data.agent]);
       setForm({ businessName: '', ownerEmail: '', ownerPhone: '', areaCode: '213', masterPrompt: '' });
+      setShowForm(false);
       showToast('AI Agent created successfully!');
     } catch (err) {
       showToast(err.message, 'error');
@@ -100,16 +141,16 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_BASE}/api/agents/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
-          masterPrompt: editPrompt,
-          ownerPhone: editOwnerPhone,
+          masterPrompt: editForm.masterPrompt,
+          ownerPhone: editForm.ownerPhone,
         }),
       });
       if (!res.ok) throw new Error('Failed to update agent');
       const data = await res.json();
       setAgents((prev) => prev.map((a) => (a.id === id ? data.agent : a)));
-      setEditing(false);
+      setEditingId(null);
       showToast('Agent updated successfully!');
     } catch (err) {
       showToast(err.message, 'error');
@@ -120,6 +161,7 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_BASE}/api/agents/${id}`, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       });
       if (!res.ok) throw new Error('Failed to delete agent');
       setAgents((prev) => prev.filter((a) => a.id !== id));
@@ -132,16 +174,17 @@ export default function Dashboard() {
 
   const startTestCall = (assistantId) => {
     if (!VAPI_PUBLIC_KEY) {
-      showToast('Vapi public key not configured. Add VITE_VAPI_PUBLIC_KEY to .env', 'error');
+      showToast('Vapi public key not configured.', 'error');
       return;
     }
     try {
       if (!vapiRef.current) {
         vapiRef.current = new Vapi(VAPI_PUBLIC_KEY);
-        vapiRef.current.on('call-start', () => setOnCall(true));
-        vapiRef.current.on('call-end', () => setOnCall(false));
+        vapiRef.current.on('call-start', () => {});
+        vapiRef.current.on('call-end', () => setActiveCallId(null));
       }
       vapiRef.current.start(assistantId);
+      setActiveCallId(assistantId);
       showToast('Starting test call... speak into your microphone!');
     } catch (err) {
       showToast('Failed to start test call: ' + err.message, 'error');
@@ -151,11 +194,9 @@ export default function Dashboard() {
   const endTestCall = () => {
     if (vapiRef.current) {
       vapiRef.current.stop();
-      setOnCall(false);
+      setActiveCallId(null);
     }
   };
-
-  const activeAgent = agents.length > 0 ? agents[0] : null;
 
   return (
     <div className="dashboard">
@@ -172,28 +213,42 @@ export default function Dashboard() {
           <Link to="/" className="logo">
             Receptionist LA
           </Link>
-          <Link to="/" className="btn btn-outline btn-sm">
-            Back to Home
-          </Link>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <Link to="/" className="btn btn-outline btn-sm">
+              Back to Home
+            </Link>
+            <button className="btn btn-danger-outline btn-sm" onClick={handleLogout}>
+              Logout
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="dashboard-main">
         <div className="dashboard-container">
-          <h1 className="dashboard-title">Customer Dashboard</h1>
-          <p className="dashboard-subtitle">
-            Set up and manage your AI receptionist agent.
-          </p>
-
-          <div className="dashboard-grid">
-            {/* Section A - Setup Form */}
-            <div className="dashboard-card">
-              <h2 className="card-title">Create AI Agent</h2>
-              <p className="card-desc">
-                Fill out the details below to set up your AI receptionist.
+          <div className="dashboard-top-row">
+            <div>
+              <h1 className="dashboard-title">AI Agents</h1>
+              <p className="dashboard-subtitle">
+                Manage all your customer AI receptionists.
               </p>
+            </div>
+            <button
+              className="btn btn-primary"
+              onClick={() => setShowForm(!showForm)}
+            >
+              {showForm ? 'Cancel' : '+ Create New Agent'}
+            </button>
+          </div>
 
-              <form onSubmit={handleCreate} className="dashboard-form">
+          {/* Create Agent Form */}
+          {showForm && (
+            <div className="dashboard-card" style={{ marginBottom: '32px' }}>
+              <h2 className="card-title">Create New Agent</h2>
+              <p className="card-desc">
+                Fill out the details below to set up a new AI receptionist.
+              </p>
+              <form onSubmit={handleCreate} className="dashboard-form create-form-grid">
                 <div className="form-group">
                   <label htmlFor="businessName">Business Name</label>
                   <input
@@ -207,7 +262,6 @@ export default function Dashboard() {
                     required
                   />
                 </div>
-
                 <div className="form-group">
                   <label htmlFor="ownerEmail">Owner Email</label>
                   <input
@@ -221,7 +275,6 @@ export default function Dashboard() {
                     required
                   />
                 </div>
-
                 <div className="form-group">
                   <label htmlFor="ownerPhone">Owner's Cell Phone</label>
                   <input
@@ -234,13 +287,9 @@ export default function Dashboard() {
                     onChange={handleChange}
                     required
                   />
-                  <span className="form-help">
-                    When a customer calls, the AI will try to connect them to this number first. If you don't answer, the AI takes over.
-                  </span>
                 </div>
-
                 <div className="form-group">
-                  <label htmlFor="areaCode">Preferred Area Code (optional)</label>
+                  <label htmlFor="areaCode">Area Code</label>
                   <input
                     id="areaCode"
                     name="areaCode"
@@ -250,198 +299,173 @@ export default function Dashboard() {
                     value={form.areaCode}
                     onChange={handleChange}
                   />
-                  <span className="form-help">
-                    We'll get you a local LA phone number with this area code.
-                  </span>
                 </div>
-
-                <div className="form-group">
+                <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                   <label htmlFor="masterPrompt">Master Prompt</label>
                   <textarea
                     id="masterPrompt"
                     name="masterPrompt"
                     className="form-textarea"
-                    rows={6}
-                    placeholder='You are the receptionist for [Business Name], a hair salon in Los Angeles. Our hours are Mon-Sat 9am-7pm. We offer haircuts ($40), coloring ($120), and styling ($60). Book appointments and answer questions about our services.'
+                    rows={4}
+                    placeholder='You are the receptionist for [Business Name], a hair salon in Los Angeles. Our hours are Mon-Sat 9am-7pm...'
                     value={form.masterPrompt}
                     onChange={handleChange}
                     required
                   />
                 </div>
-
-                <button
-                  type="submit"
-                  className="btn btn-primary btn-full"
-                  disabled={loading}
-                >
-                  {loading ? 'Creating Agent...' : 'Create AI Agent'}
-                </button>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <button
+                    type="submit"
+                    className="btn btn-primary btn-lg"
+                    disabled={loading}
+                  >
+                    {loading ? 'Creating Agent...' : 'Create AI Agent'}
+                  </button>
+                </div>
               </form>
             </div>
+          )}
 
-            {/* Section B - Agent Status */}
+          {/* Agents List */}
+          {fetching ? (
+            <div className="agent-placeholder">
+              <p>Loading agents...</p>
+            </div>
+          ) : agents.length === 0 ? (
             <div className="dashboard-card">
-              <h2 className="card-title">Agent Status</h2>
-
-              {fetching ? (
-                <div className="agent-placeholder">
-                  <p>Loading agents...</p>
+              <div className="agent-placeholder">
+                <div className="placeholder-icon">
+                  <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z" />
+                  </svg>
                 </div>
-              ) : !activeAgent ? (
-                <div className="agent-placeholder">
-                  <div className="placeholder-icon">
-                    <svg width="48" height="48" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6.75c0 8.284 6.716 15 15 15h2.25a2.25 2.25 0 002.25-2.25v-1.372c0-.516-.351-.966-.852-1.091l-4.423-1.106c-.44-.11-.902.055-1.173.417l-.97 1.293c-.282.376-.769.542-1.21.38a12.035 12.035 0 01-7.143-7.143c-.162-.441.004-.928.38-1.21l1.293-.97c.363-.271.527-.734.417-1.173L6.963 3.102a1.125 1.125 0 00-1.091-.852H4.5A2.25 2.25 0 002.25 4.5v2.25z" />
-                    </svg>
-                  </div>
-                  <p>No agent created yet.</p>
-                  <p className="placeholder-sub">
-                    Fill out the form to create your AI receptionist.
-                  </p>
-                </div>
-              ) : (
-                <div className="agent-status">
-                  <div className="status-row">
+                <p>No agents created yet.</p>
+                <p className="placeholder-sub">
+                  Click "Create New Agent" to get started.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="agents-list">
+              {agents.map((agent) => (
+                <div key={agent.id} className="dashboard-card agent-card">
+                  <div className="agent-card-header">
+                    <div>
+                      <h3 className="agent-card-name">{agent.businessName}</h3>
+                      <p className="agent-card-meta">
+                        {agent.ownerEmail} &middot; Created {new Date(agent.createdAt).toLocaleDateString()}
+                      </p>
+                    </div>
                     <span className="status-badge">
                       <span className="status-dot" />
                       Active
                     </span>
                   </div>
 
-                  <div className="agent-detail">
-                    <label>Business</label>
-                    <p>{activeAgent.businessName}</p>
+                  <div className="agent-card-details">
+                    <div className="agent-card-detail">
+                      <label>AI Phone Number</label>
+                      <p>{agent.twilioNumber || agent.vapiPhoneNumber || 'N/A'}</p>
+                    </div>
+                    <div className="agent-card-detail">
+                      <label>Owner's Phone</label>
+                      <p>{agent.ownerPhone || 'Not set'}</p>
+                    </div>
+                    <div className="agent-card-detail prompt-detail">
+                      <label>Master Prompt</label>
+                      <p>{agent.masterPrompt?.substring(0, 120)}{agent.masterPrompt?.length > 120 ? '...' : ''}</p>
+                    </div>
                   </div>
 
-                  <div className="agent-detail">
-                    <label>Your AI Phone Number</label>
-                    <p className="phone-display">
-                      {activeAgent.twilioNumber || activeAgent.vapiPhoneNumber || activeAgent.aiPhoneNumber || 'Provisioning...'}
-                    </p>
-                  </div>
-
-                  <div className="agent-detail">
-                    <label>Owner's Phone</label>
-                    <p className="phone-display">
-                      {activeAgent.ownerPhone || 'Not set'}
-                    </p>
-                  </div>
-
-                  <div className="agent-instructions">
-                    <p>
-                      Give this number to your customers. When they call, the AI will greet them and try connecting to your cell phone. If you don't answer, the AI handles the call based on your instructions.
-                    </p>
-                  </div>
-
-                  <div className="agent-steps">
-                    <h3>How It Works</h3>
-                    <ol>
-                      <li>Customer calls your AI number</li>
-                      <li>AI greets them and tries to connect to you</li>
-                      <li>If you're busy, AI handles the call for you</li>
-                    </ol>
-                  </div>
-
-                  <div className="test-call-section">
-                    {onCall ? (
-                      <button
-                        className="btn btn-danger btn-full"
-                        onClick={endTestCall}
-                      >
-                        🔴 End Test Call
-                      </button>
-                    ) : (
-                      <button
-                        className="btn btn-primary btn-full"
-                        onClick={() => startTestCall(activeAgent.assistantId)}
-                      >
-                        🎙️ Test Call in Browser
-                      </button>
-                    )}
-                    <span className="form-help" style={{ textAlign: 'center', display: 'block', marginTop: '8px' }}>
-                      {onCall ? 'Call in progress — speak into your microphone' : 'Talk to your AI receptionist right from your browser'}
-                    </span>
-                  </div>
-
-                  {editing ? (
+                  {/* Edit Form */}
+                  {editingId === agent.id && (
                     <div className="edit-prompt-section">
                       <div className="form-group">
                         <label>Owner's Phone</label>
                         <input
                           type="tel"
                           className="form-input"
-                          value={editOwnerPhone}
-                          onChange={(e) => setEditOwnerPhone(e.target.value)}
+                          value={editForm.ownerPhone}
+                          onChange={(e) => setEditForm((prev) => ({ ...prev, ownerPhone: e.target.value }))}
                         />
                       </div>
                       <div className="form-group">
-                        <label>Edit Master Prompt</label>
+                        <label>Master Prompt</label>
                         <textarea
                           className="form-textarea"
                           rows={5}
-                          value={editPrompt}
-                          onChange={(e) => setEditPrompt(e.target.value)}
+                          value={editForm.masterPrompt}
+                          onChange={(e) => setEditForm((prev) => ({ ...prev, masterPrompt: e.target.value }))}
                         />
                       </div>
                       <div className="edit-actions">
-                        <button
-                          className="btn btn-primary"
-                          onClick={() => handleUpdate(activeAgent.id)}
-                        >
+                        <button className="btn btn-primary" onClick={() => handleUpdate(agent.id)}>
                           Save Changes
                         </button>
-                        <button
-                          className="btn btn-outline"
-                          onClick={() => setEditing(false)}
-                        >
+                        <button className="btn btn-outline" onClick={() => setEditingId(null)}>
                           Cancel
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    <div className="agent-actions">
+                  )}
+
+                  {/* Delete Confirmation */}
+                  {confirmDelete === agent.id && (
+                    <div className="delete-confirm">
+                      <p>Are you sure? This will delete the agent and release the phone number.</p>
+                      <div className="delete-confirm-actions">
+                        <button className="btn btn-danger" onClick={() => handleDelete(agent.id)}>
+                          Yes, Delete
+                        </button>
+                        <button className="btn btn-outline" onClick={() => setConfirmDelete(null)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  <div className="agent-card-actions">
+                    {activeCallId === agent.assistantId ? (
+                      <button className="btn btn-on-call" onClick={endTestCall}>
+                        🔴 End Call
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => startTestCall(agent.assistantId)}
+                        disabled={!!activeCallId}
+                      >
+                        🎙️ Test Call
+                      </button>
+                    )}
+                    {editingId !== agent.id && (
                       <button
                         className="btn btn-outline"
                         onClick={() => {
-                          setEditPrompt(activeAgent.masterPrompt || '');
-                          setEditOwnerPhone(activeAgent.ownerPhone || '');
-                          setEditing(true);
+                          setEditForm({
+                            masterPrompt: agent.masterPrompt || '',
+                            ownerPhone: agent.ownerPhone || '',
+                          });
+                          setEditingId(agent.id);
                         }}
                       >
-                        Edit Agent
+                        Edit
                       </button>
-                      {confirmDelete === activeAgent.id ? (
-                        <div className="delete-confirm">
-                          <p>Are you sure? This cannot be undone.</p>
-                          <div className="delete-confirm-actions">
-                            <button
-                              className="btn btn-danger"
-                              onClick={() => handleDelete(activeAgent.id)}
-                            >
-                              Yes, Delete
-                            </button>
-                            <button
-                              className="btn btn-outline"
-                              onClick={() => setConfirmDelete(null)}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          className="btn btn-danger-outline"
-                          onClick={() => setConfirmDelete(activeAgent.id)}
-                        >
-                          Delete Agent
-                        </button>
-                      )}
-                    </div>
-                  )}
+                    )}
+                    {confirmDelete !== agent.id && (
+                      <button
+                        className="btn btn-danger-outline"
+                        onClick={() => setConfirmDelete(agent.id)}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
-          </div>
+          )}
         </div>
       </main>
     </div>

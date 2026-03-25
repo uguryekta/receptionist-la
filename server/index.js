@@ -2,12 +2,15 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
 import { VapiClient } from "@vapi-ai/server-sdk";
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
 
 app.use(cors({ origin: "http://localhost:5173" }));
 app.use(express.json());
@@ -16,6 +19,61 @@ const vapi = new VapiClient({ token: process.env.VAPI_API_KEY });
 
 // TODO: Replace with database
 const agents = new Map();
+
+// ---------------------------------------------------------------------------
+// Auth: Users store (TODO: Replace with database)
+// ---------------------------------------------------------------------------
+const users = new Map();
+
+// Create default admin user from env vars on startup
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@receptionistla.com";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+const adminHash = bcrypt.hashSync(ADMIN_PASSWORD, 10);
+users.set(ADMIN_EMAIL, { email: ADMIN_EMAIL, passwordHash: adminHash, role: "admin" });
+console.log(`Default admin user: ${ADMIN_EMAIL}`);
+
+// ---------------------------------------------------------------------------
+// Auth middleware
+// ---------------------------------------------------------------------------
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    const token = authHeader.split(" ")[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/auth/login
+// ---------------------------------------------------------------------------
+app.post("/api/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required" });
+  }
+  const user = users.get(email.toLowerCase());
+  if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
+    return res.status(401).json({ error: "Invalid email or password" });
+  }
+  const token = jwt.sign({ email: user.email, role: user.role }, JWT_SECRET, {
+    expiresIn: "24h",
+  });
+  return res.json({ token, user: { email: user.email, role: user.role } });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/auth/me - Verify token
+// ---------------------------------------------------------------------------
+app.get("/api/auth/me", requireAuth, (req, res) => {
+  return res.json({ user: req.user });
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -100,7 +158,7 @@ function buildAssistantModel(masterPrompt) {
 // ---------------------------------------------------------------------------
 // POST /api/agents - Create a new AI agent
 // ---------------------------------------------------------------------------
-app.post("/api/agents", async (req, res) => {
+app.post("/api/agents", requireAuth, async (req, res) => {
   try {
     const { businessName, ownerPhone, masterPrompt, ownerEmail, areaCode } =
       req.body;
@@ -191,7 +249,7 @@ app.post("/api/agents", async (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /api/agents - List all agents
 // ---------------------------------------------------------------------------
-app.get("/api/agents", (_req, res) => {
+app.get("/api/agents", requireAuth, (_req, res) => {
   const list = Array.from(agents.values());
   return res.json({ agents: list });
 });
@@ -199,7 +257,7 @@ app.get("/api/agents", (_req, res) => {
 // ---------------------------------------------------------------------------
 // GET /api/agents/:id - Get a single agent
 // ---------------------------------------------------------------------------
-app.get("/api/agents/:id", (req, res) => {
+app.get("/api/agents/:id", requireAuth, (req, res) => {
   const agent = agents.get(req.params.id);
   if (!agent) {
     return res.status(404).json({ error: "Agent not found" });
@@ -210,7 +268,7 @@ app.get("/api/agents/:id", (req, res) => {
 // ---------------------------------------------------------------------------
 // PATCH /api/agents/:id - Update agent
 // ---------------------------------------------------------------------------
-app.patch("/api/agents/:id", async (req, res) => {
+app.patch("/api/agents/:id", requireAuth, async (req, res) => {
   try {
     const agent = agents.get(req.params.id);
     if (!agent) {
@@ -256,7 +314,7 @@ app.patch("/api/agents/:id", async (req, res) => {
 // ---------------------------------------------------------------------------
 // DELETE /api/agents/:id - Delete agent
 // ---------------------------------------------------------------------------
-app.delete("/api/agents/:id", async (req, res) => {
+app.delete("/api/agents/:id", requireAuth, async (req, res) => {
   try {
     const agent = agents.get(req.params.id);
     if (!agent) {
