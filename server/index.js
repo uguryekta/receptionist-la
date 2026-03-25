@@ -4,13 +4,8 @@ import dotenv from "dotenv";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+import pg from "pg";
 import { VapiClient } from "@vapi-ai/server-sdk";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 dotenv.config();
 
@@ -31,35 +26,84 @@ app.use(express.json());
 const vapi = new VapiClient({ token: process.env.VAPI_API_KEY });
 
 // ---------------------------------------------------------------------------
-// Persistent file-based agent storage
+// PostgreSQL database
 // ---------------------------------------------------------------------------
-const AGENTS_FILE = path.join(__dirname, "agents.json");
-const agents = new Map();
+const pool = new pg.Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes("railway") ? { rejectUnauthorized: false } : false,
+});
 
-function loadAgents() {
+async function initDB() {
+  const client = await pool.connect();
   try {
-    if (fs.existsSync(AGENTS_FILE)) {
-      const data = JSON.parse(fs.readFileSync(AGENTS_FILE, "utf-8"));
-      for (const agent of data) {
-        agents.set(agent.id, agent);
-      }
-      console.log(`Loaded ${agents.size} agent(s) from disk.`);
-    }
-  } catch (err) {
-    console.error("Error loading agents from disk:", err.message);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY,
+        assistant_id TEXT NOT NULL,
+        phone_number_id TEXT,
+        twilio_number TEXT,
+        twilio_number_sid TEXT,
+        business_name TEXT NOT NULL,
+        owner_phone TEXT,
+        master_prompt TEXT,
+        owner_email TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        active BOOLEAN DEFAULT TRUE
+      )
+    `);
+    console.log("Database initialized.");
+  } finally {
+    client.release();
   }
 }
 
-function saveAgents() {
-  try {
-    const data = Array.from(agents.values());
-    fs.writeFileSync(AGENTS_FILE, JSON.stringify(data, null, 2));
-  } catch (err) {
-    console.error("Error saving agents to disk:", err.message);
-  }
+function rowToAgent(row) {
+  return {
+    id: row.id,
+    assistantId: row.assistant_id,
+    phoneNumberId: row.phone_number_id,
+    twilioNumber: row.twilio_number,
+    twilioNumberSid: row.twilio_number_sid,
+    businessName: row.business_name,
+    ownerPhone: row.owner_phone,
+    masterPrompt: row.master_prompt,
+    ownerEmail: row.owner_email,
+    createdAt: row.created_at,
+    active: row.active,
+  };
 }
 
-loadAgents();
+async function getAllAgents() {
+  const { rows } = await pool.query("SELECT * FROM agents ORDER BY created_at DESC");
+  return rows.map(rowToAgent);
+}
+
+async function getAgent(id) {
+  const { rows } = await pool.query("SELECT * FROM agents WHERE id = $1", [id]);
+  return rows[0] ? rowToAgent(rows[0]) : null;
+}
+
+async function saveAgent(agent) {
+  await pool.query(
+    `INSERT INTO agents (id, assistant_id, phone_number_id, twilio_number, twilio_number_sid, business_name, owner_phone, master_prompt, owner_email, created_at, active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (id) DO UPDATE SET
+       assistant_id=EXCLUDED.assistant_id, phone_number_id=EXCLUDED.phone_number_id,
+       twilio_number=EXCLUDED.twilio_number, twilio_number_sid=EXCLUDED.twilio_number_sid,
+       business_name=EXCLUDED.business_name, owner_phone=EXCLUDED.owner_phone,
+       master_prompt=EXCLUDED.master_prompt, owner_email=EXCLUDED.owner_email,
+       active=EXCLUDED.active`,
+    [agent.id, agent.assistantId, agent.phoneNumberId, agent.twilioNumber,
+     agent.twilioNumberSid, agent.businessName, agent.ownerPhone, agent.masterPrompt,
+     agent.ownerEmail, agent.createdAt, agent.active ?? true]
+  );
+}
+
+async function deleteAgent(id) {
+  await pool.query("DELETE FROM agents WHERE id = $1", [id]);
+}
+
+initDB().catch((err) => console.error("DB init error:", err.message));
 
 // ---------------------------------------------------------------------------
 // Auth: Users store (TODO: Replace with database)
@@ -277,8 +321,7 @@ app.post("/api/agents", requireAuth, async (req, res) => {
       active: true,
     };
 
-    agents.set(agent.id, agent);
-    saveAgents();
+    await saveAgent(agent);
 
     return res.status(201).json({ agent });
   } catch (err) {
@@ -292,16 +335,16 @@ app.post("/api/agents", requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /api/agents - List all agents
 // ---------------------------------------------------------------------------
-app.get("/api/agents", requireAuth, (_req, res) => {
-  const list = Array.from(agents.values());
+app.get("/api/agents", requireAuth, async (_req, res) => {
+  const list = await getAllAgents();
   return res.json({ agents: list });
 });
 
 // ---------------------------------------------------------------------------
 // GET /api/agents/:id - Get a single agent
 // ---------------------------------------------------------------------------
-app.get("/api/agents/:id", requireAuth, (req, res) => {
-  const agent = agents.get(req.params.id);
+app.get("/api/agents/:id", requireAuth, async (req, res) => {
+  const agent = await getAgent(req.params.id);
   if (!agent) {
     return res.status(404).json({ error: "Agent not found" });
   }
@@ -313,7 +356,7 @@ app.get("/api/agents/:id", requireAuth, (req, res) => {
 // ---------------------------------------------------------------------------
 app.patch("/api/agents/:id", requireAuth, async (req, res) => {
   try {
-    const agent = agents.get(req.params.id);
+    const agent = await getAgent(req.params.id);
     if (!agent) {
       return res.status(404).json({ error: "Agent not found" });
     }
@@ -326,7 +369,6 @@ app.patch("/api/agents/:id", requireAuth, async (req, res) => {
     // If either masterPrompt or ownerPhone changed, rebuild the model config
     if (promptChanged || phoneChanged) {
       const newPrompt = masterPrompt || agent.masterPrompt;
-      const newPhone = ownerPhone || agent.ownerPhone;
 
       await vapi.assistants.update(agent.assistantId, {
         model: buildAssistantModel(newPrompt),
@@ -343,8 +385,7 @@ app.patch("/api/agents/:id", requireAuth, async (req, res) => {
       });
     }
 
-    agents.set(agent.id, agent);
-    saveAgents();
+    await saveAgent(agent);
 
     return res.json({ agent });
   } catch (err) {
@@ -360,22 +401,18 @@ app.patch("/api/agents/:id", requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 app.post("/api/agents/:id/toggle", requireAuth, async (req, res) => {
   try {
-    const agent = agents.get(req.params.id);
+    const agent = await getAgent(req.params.id);
     if (!agent) {
       return res.status(404).json({ error: "Agent not found" });
     }
 
     const newStatus = !agent.active;
 
-    // Update Vapi assistant - set serverUrl to null to effectively disable it
-    // or re-enable by restoring the model
     if (newStatus) {
-      // Reactivate: restore assistant model
       await vapi.assistants.update(agent.assistantId, {
         model: buildAssistantModel(agent.masterPrompt),
       });
     } else {
-      // Deactivate: set first message to inform callers
       await vapi.assistants.update(agent.assistantId, {
         model: {
           provider: "openai",
@@ -391,8 +428,7 @@ app.post("/api/agents/:id/toggle", requireAuth, async (req, res) => {
     }
 
     agent.active = newStatus;
-    agents.set(agent.id, agent);
-    saveAgents();
+    await saveAgent(agent);
 
     return res.json({ agent });
   } catch (err) {
@@ -406,7 +442,7 @@ app.post("/api/agents/:id/toggle", requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 app.delete("/api/agents/:id", requireAuth, async (req, res) => {
   try {
-    const agent = agents.get(req.params.id);
+    const agent = await getAgent(req.params.id);
     if (!agent) {
       return res.status(404).json({ error: "Agent not found" });
     }
@@ -435,8 +471,7 @@ app.delete("/api/agents/:id", requireAuth, async (req, res) => {
       }
     }
 
-    agents.delete(agent.id);
-    saveAgents();
+    await deleteAgent(agent.id);
 
     return res.json({ success: true });
   } catch (err) {
