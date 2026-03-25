@@ -476,6 +476,21 @@ export default function Dashboard() {
     }
   };
 
+  const handleToggleActive = async (id) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/agents/${id}/toggle`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) throw new Error('Failed to toggle agent');
+      const data = await res.json();
+      setAgents((prev) => prev.map((a) => (a.id === id ? data.agent : a)));
+      showToast(`Agent ${data.agent.active ? 'activated' : 'deactivated'} successfully.`);
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
   const handleDelete = async (id) => {
     try {
       const res = await fetch(`${API_BASE}/api/agents/${id}`, {
@@ -895,9 +910,9 @@ export default function Dashboard() {
                         {agent.ownerEmail} &middot; Created {new Date(agent.createdAt).toLocaleDateString()}
                       </p>
                     </div>
-                    <span className="status-badge">
+                    <span className={`status-badge ${agent.active === false ? 'status-inactive' : ''}`}>
                       <span className="status-dot" />
-                      Active
+                      {agent.active === false ? 'Inactive' : 'Active'}
                     </span>
                   </div>
 
@@ -978,6 +993,12 @@ export default function Dashboard() {
                         Test Call
                       </button>
                     )}
+                    <button
+                      className={`btn ${agent.active === false ? 'btn-success' : 'btn-warning'}`}
+                      onClick={() => handleToggleActive(agent.id)}
+                    >
+                      {agent.active === false ? 'Activate' : 'Deactivate'}
+                    </button>
                     {editingId !== agent.id && (
                       <button
                         className="btn btn-outline"

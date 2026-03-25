@@ -1074,6 +1074,34 @@ img {
   display: inline-block;
 }
 
+.status-inactive {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.status-inactive .status-dot {
+  background: #ef4444;
+}
+
+.btn-success {
+  background: #10b981;
+  color: #fff;
+  border: none;
+}
+.btn-success:hover {
+  background: #059669;
+}
+
+.btn-warning {
+  background: #f59e0b;
+  color: #fff;
+  border: none;
+}
+.btn-warning:hover {
+  background: #d97706;
+}
+
 .agent-detail {
   display: flex;
   flex-direction: column;

@@ -274,6 +274,7 @@ app.post("/api/agents", requireAuth, async (req, res) => {
       masterPrompt,
       ownerEmail: ownerEmail || null,
       createdAt: new Date().toISOString(),
+      active: true,
     };
 
     agents.set(agent.id, agent);
@@ -351,6 +352,52 @@ app.patch("/api/agents/:id", requireAuth, async (req, res) => {
     return res
       .status(500)
       .json({ error: "Failed to update agent", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/agents/:id/toggle - Activate/Deactivate agent
+// ---------------------------------------------------------------------------
+app.post("/api/agents/:id/toggle", requireAuth, async (req, res) => {
+  try {
+    const agent = agents.get(req.params.id);
+    if (!agent) {
+      return res.status(404).json({ error: "Agent not found" });
+    }
+
+    const newStatus = !agent.active;
+
+    // Update Vapi assistant - set serverUrl to null to effectively disable it
+    // or re-enable by restoring the model
+    if (newStatus) {
+      // Reactivate: restore assistant model
+      await vapi.assistants.update(agent.assistantId, {
+        model: buildAssistantModel(agent.masterPrompt),
+      });
+    } else {
+      // Deactivate: set first message to inform callers
+      await vapi.assistants.update(agent.assistantId, {
+        model: {
+          provider: "openai",
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "system",
+              content: "You are a temporary message system. Politely inform the caller that this line is currently inactive and suggest they try again later or visit the business website. Keep it brief and professional.",
+            },
+          ],
+        },
+      });
+    }
+
+    agent.active = newStatus;
+    agents.set(agent.id, agent);
+    saveAgents();
+
+    return res.json({ agent });
+  } catch (err) {
+    console.error("Error toggling agent:", err);
+    return res.status(500).json({ error: "Failed to toggle agent", details: err.message });
   }
 });
 
