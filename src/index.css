@@ -96,6 +96,24 @@ img {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
 }
 
+.btn-on-call {
+  background: #dc2626;
+  color: #fff;
+  border-color: #dc2626;
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+  animation: pulse-red 1.5s infinite;
+}
+
+.btn-on-call:hover {
+  background: #b91c1c;
+  border-color: #b91c1c;
+}
+
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3); }
+  50% { box-shadow: 0 2px 20px rgba(220, 38, 38, 0.5); }
+}
+
 .btn-lg {
   padding: 14px 32px;
   font-size: 1.05rem;
@@ -1232,6 +1250,17 @@ img {
   border-radius: 50%;
   font-size: 0.75rem;
   font-weight: 700;
+}
+
+/* Test Call */
+.test-call-section {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.test-call-section .btn-full {
+  font-size: 1rem;
+  padding: 14px;
 }
 
 /* Toast */

@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import VapiModule from '@vapi-ai/web';
+const Vapi = VapiModule.default || VapiModule;
 
 const API_BASE = 'http://localhost:3001';
+const VAPI_PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || '';
 
 function Toast({ message, type, onClose }) {
   useEffect(() => {
@@ -35,6 +38,8 @@ export default function Dashboard() {
 
   const [editPrompt, setEditPrompt] = useState('');
   const [editOwnerPhone, setEditOwnerPhone] = useState('');
+  const [onCall, setOnCall] = useState(false);
+  const vapiRef = useRef(null);
 
   const showToast = useCallback((message, type = 'success') => {
     setToast({ message, type });
@@ -122,6 +127,31 @@ export default function Dashboard() {
       showToast('Agent deleted successfully.');
     } catch (err) {
       showToast(err.message, 'error');
+    }
+  };
+
+  const startTestCall = (assistantId) => {
+    if (!VAPI_PUBLIC_KEY) {
+      showToast('Vapi public key not configured. Add VITE_VAPI_PUBLIC_KEY to .env', 'error');
+      return;
+    }
+    try {
+      if (!vapiRef.current) {
+        vapiRef.current = new Vapi(VAPI_PUBLIC_KEY);
+        vapiRef.current.on('call-start', () => setOnCall(true));
+        vapiRef.current.on('call-end', () => setOnCall(false));
+      }
+      vapiRef.current.start(assistantId);
+      showToast('Starting test call... speak into your microphone!');
+    } catch (err) {
+      showToast('Failed to start test call: ' + err.message, 'error');
+    }
+  };
+
+  const endTestCall = () => {
+    if (vapiRef.current) {
+      vapiRef.current.stop();
+      setOnCall(false);
     }
   };
 
@@ -310,6 +340,27 @@ export default function Dashboard() {
                       <li>AI greets them and tries to connect to you</li>
                       <li>If you're busy, AI handles the call for you</li>
                     </ol>
+                  </div>
+
+                  <div className="test-call-section">
+                    {onCall ? (
+                      <button
+                        className="btn btn-danger btn-full"
+                        onClick={endTestCall}
+                      >
+                        🔴 End Test Call
+                      </button>
+                    ) : (
+                      <button
+                        className="btn btn-primary btn-full"
+                        onClick={() => startTestCall(activeAgent.assistantId)}
+                      >
+                        🎙️ Test Call in Browser
+                      </button>
+                    )}
+                    <span className="form-help" style={{ textAlign: 'center', display: 'block', marginTop: '8px' }}>
+                      {onCall ? 'Call in progress — speak into your microphone' : 'Talk to your AI receptionist right from your browser'}
+                    </span>
                   </div>
 
                   {editing ? (

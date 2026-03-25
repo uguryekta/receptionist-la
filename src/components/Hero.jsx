@@ -1,21 +1,46 @@
 import { useState, useRef } from 'react';
-import { ArrowRight, Zap, Play, Pause } from 'lucide-react';
+import { ArrowRight, Zap, Phone, PhoneOff } from 'lucide-react';
+import VapiModule from '@vapi-ai/web';
+const Vapi = VapiModule.default || VapiModule;
+
+const VAPI_PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY || '';
+const DEMO_ASSISTANT_ID = import.meta.env.VITE_VAPI_DEMO_ASSISTANT_ID || '';
 
 export default function Hero() {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const audioRef = useRef(null);
+  const [onCall, setOnCall] = useState(false);
+  const vapiRef = useRef(null);
 
-  const toggleAudio = () => {
-    if (!audioRef.current) {
-      audioRef.current = new Audio('/sample_call.wav');
-      audioRef.current.addEventListener('ended', () => setIsPlaying(false));
-    }
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
+  const toggleCall = () => {
+    if (onCall) {
+      // End the call
+      if (vapiRef.current) {
+        vapiRef.current.stop();
+        setOnCall(false);
+      }
     } else {
-      audioRef.current.play();
-      setIsPlaying(true);
+      // Start a call
+      if (!VAPI_PUBLIC_KEY) return;
+      if (!vapiRef.current) {
+        vapiRef.current = new Vapi(VAPI_PUBLIC_KEY);
+        vapiRef.current.on('call-start', () => setOnCall(true));
+        vapiRef.current.on('call-end', () => setOnCall(false));
+      }
+      if (DEMO_ASSISTANT_ID) {
+        vapiRef.current.start(DEMO_ASSISTANT_ID);
+      } else {
+        vapiRef.current.start({
+          firstMessage: "Hello! Thank you for calling. This is a demo of our AI receptionist. How can I help you today?",
+          model: {
+            provider: "openai",
+            model: "gpt-4o",
+            messages: [{
+              role: "system",
+              content: "You are a friendly AI receptionist demo for Receptionist LA. You help small businesses in Los Angeles by answering their phone calls 24/7. This is a demo call — showcase your abilities: answer questions, book appointments, handle FAQs. Be warm, professional, and concise. Keep responses short since this is a voice call."
+            }]
+          },
+          voice: { provider: "11labs", voiceId: "burt" }
+        });
+      }
     }
   };
 
@@ -41,11 +66,11 @@ export default function Hero() {
               <ArrowRight size={18} />
             </a>
             <button
-              className="btn btn-outline btn-lg"
-              onClick={toggleAudio}
+              className={`btn btn-lg ${onCall ? 'btn-on-call' : 'btn-outline'}`}
+              onClick={toggleCall}
             >
-              {isPlaying ? <Pause size={18} /> : <Play size={18} />}
-              {isPlaying ? 'Pause Call' : 'Listen to a Call'}
+              {onCall ? <PhoneOff size={18} /> : <Phone size={18} />}
+              {onCall ? 'End Call' : 'Talk to AI Now'}
             </button>
           </div>
         </div>
