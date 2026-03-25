@@ -407,25 +407,30 @@ app.post("/api/agents/:id/toggle", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "Agent not found" });
     }
 
-    const newStatus = !agent.active;
+    const newStatus = agent.active === false ? true : false;
 
-    if (newStatus) {
-      await vapi.assistants.update(agent.assistantId, {
-        model: buildAssistantModel(agent.masterPrompt),
-      });
-    } else {
-      await vapi.assistants.update(agent.assistantId, {
-        model: {
-          provider: "openai",
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content: "You are a temporary message system. Politely inform the caller that this line is currently inactive and suggest they try again later or visit the business website. Keep it brief and professional.",
-            },
-          ],
-        },
-      });
+    try {
+      if (newStatus) {
+        await vapi.assistants.update(agent.assistantId, {
+          model: buildAssistantModel(agent.masterPrompt),
+        });
+      } else {
+        await vapi.assistants.update(agent.assistantId, {
+          model: {
+            provider: "openai",
+            model: "gpt-4o",
+            messages: [
+              {
+                role: "system",
+                content: "You are a temporary message system. Politely inform the caller that this line is currently inactive and suggest they try again later or visit the business website. Keep it brief and professional.",
+              },
+            ],
+          },
+        });
+      }
+    } catch (vapiErr) {
+      console.error("Vapi update failed during toggle:", vapiErr.message);
+      // Still toggle locally even if Vapi update fails
     }
 
     agent.active = newStatus;
