@@ -136,7 +136,7 @@ ${cancellation ? `**Cancellation/Rescheduling:**\n${cancellation}` : ''}
 ${specialNotes ? `## ADDITIONAL NOTES\n${specialNotes}` : ''}
 
 ## CALL FLOW
-1. **Greet** warmly: "Hello! Thank you for calling ${biz}. How can I help you today?"
+1. **Greet** warmly: "Hello! Thank you for calling ${biz}. I can assist you in English and Spanish. How can I help you today?"
 2. **Listen** carefully to the caller's needs
 3. **Respond** with accurate information from this prompt only
 4. **Collect info** if needed (name, number, message, appointment details)
