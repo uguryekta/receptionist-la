@@ -17,7 +17,7 @@ export default function Navbar() {
           <li><a href="#pricing" onClick={() => setMenuOpen(false)}>Pricing</a></li>
         </ul>
         <div className="nav-actions">
-          <a href="#book" className="btn btn-primary">Book Free Consultation</a>
+          <a href="#book" className="btn btn-primary">Book a Demo</a>
           <button className="menu-toggle" onClick={() => setMenuOpen(!menuOpen)} aria-label="Toggle menu">
             {menuOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
