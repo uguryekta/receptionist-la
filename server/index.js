@@ -108,7 +108,7 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
   return res.json({ received: true });
 });
 
-app.use(express.json());
+app.use(express.json({ limit: "5mb" }));
 
 const vapi = new VapiClient({ token: process.env.VAPI_API_KEY });
 
@@ -1356,6 +1356,14 @@ app.post("/api/my/change-password", requireAuth, async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: "Failed to change password" });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Global error handler — ensures CORS headers are always sent
+// ---------------------------------------------------------------------------
+app.use((err, req, res, _next) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({ error: "Internal server error" });
 });
 
 // ---------------------------------------------------------------------------
