@@ -681,6 +681,28 @@ app.post("/api/agents/:id/toggle", requireAuth, async (req, res) => {
           firstMessage: "We're sorry, this line is currently inactive. Please try again later or visit our website. Goodbye.",
         });
       }
+      // If activating, re-link the shared phone number to this agent
+      if (newStatus) {
+        const EXISTING_TWILIO_NUMBER = process.env.TWILIO_PHONE_NUMBER || "+18444922681";
+        const listRes = await fetch("https://api.vapi.ai/phone-number", {
+          headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
+        });
+        const allNumbers = await listRes.json();
+        const existing = Array.isArray(allNumbers)
+          ? allNumbers.find((p) => p.number === EXISTING_TWILIO_NUMBER && p.provider === "twilio")
+          : null;
+        if (existing) {
+          await fetch(`https://api.vapi.ai/phone-number/${existing.id}`, {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${process.env.VAPI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ assistantId: agent.assistantId }),
+          });
+          console.log(`Re-linked phone number to activated agent: ${agent.businessName}`);
+        }
+      }
     } catch (vapiErr) {
       console.error("Vapi update failed during toggle:", vapiErr.message);
     }
@@ -705,31 +727,46 @@ app.delete("/api/agents/:id", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "Agent not found" });
     }
 
-    // Delete Vapi phone number
-    try {
-      await vapi.phoneNumbers.delete(agent.phoneNumberId);
-    } catch (err) {
-      console.error("Error deleting Vapi phone number:", err.message);
-    }
-
-    // Delete Vapi assistant
+    // Delete Vapi assistant (but NOT the shared phone number)
     try {
       await vapi.assistants.delete(agent.assistantId);
     } catch (err) {
       console.error("Error deleting Vapi assistant:", err.message);
     }
 
-    // Release the Twilio number
-    if (agent.twilioNumberSid) {
-      try {
-        await releaseTwilioNumber(agent.twilioNumberSid);
-        console.log(`Released Twilio number: ${agent.twilioNumber} (${agent.twilioNumberSid})`);
-      } catch (err) {
-        console.error("Error releasing Twilio number:", err.message);
-      }
-    }
-
     await deleteAgent(agent.id);
+
+    // Re-link the shared phone number to the next active agent (if any)
+    try {
+      const remaining = await pool.query(
+        "SELECT * FROM agents WHERE id != $1 AND active = true ORDER BY created_at DESC LIMIT 1",
+        [agent.id]
+      );
+      if (remaining.rows.length > 0) {
+        const nextAgent = remaining.rows[0];
+        const EXISTING_TWILIO_NUMBER = process.env.TWILIO_PHONE_NUMBER || "+18444922681";
+        const listRes = await fetch("https://api.vapi.ai/phone-number", {
+          headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}` },
+        });
+        const allNumbers = await listRes.json();
+        const existing = Array.isArray(allNumbers)
+          ? allNumbers.find((p) => p.number === EXISTING_TWILIO_NUMBER && p.provider === "twilio")
+          : null;
+        if (existing) {
+          await fetch(`https://api.vapi.ai/phone-number/${existing.id}`, {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${process.env.VAPI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ assistantId: nextAgent.assistant_id }),
+          });
+          console.log(`Re-linked phone number to agent: ${nextAgent.business_name} (${nextAgent.assistant_id})`);
+        }
+      }
+    } catch (err) {
+      console.error("Error re-linking phone number:", err.message);
+    }
 
     return res.json({ success: true });
   } catch (err) {
