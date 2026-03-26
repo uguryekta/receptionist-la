@@ -25,22 +25,7 @@ export default function Hero() {
         vapiRef.current.on('call-start', () => setOnCall(true));
         vapiRef.current.on('call-end', () => setOnCall(false));
       }
-      if (DEMO_ASSISTANT_ID) {
-        vapiRef.current.start(DEMO_ASSISTANT_ID);
-      } else {
-        vapiRef.current.start({
-          firstMessage: "Hello! Thank you for calling. This is a demo of our AI receptionist. How can I help you today?",
-          model: {
-            provider: "openai",
-            model: "gpt-4o",
-            messages: [{
-              role: "system",
-              content: "You are a friendly AI receptionist demo for Receptionist LA. You help small businesses in Los Angeles by answering their phone calls 24/7. This is a demo call — showcase your abilities: answer questions, book appointments, handle FAQs. Be warm, professional, and concise. Keep responses short since this is a voice call."
-            }]
-          },
-          voice: { provider: "11labs", voiceId: "burt" }
-        });
-      }
+      vapiRef.current.start(DEMO_ASSISTANT_ID || '9160374d-3ad8-4bc4-8544-70baa401f707');
     }
   };
 

@@ -490,6 +490,70 @@ function buildAssistantModel(masterPrompt) {
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/vapi/webhook - Vapi server URL for call events (SMS on end-of-call)
+// ---------------------------------------------------------------------------
+app.post("/api/vapi/webhook", async (req, res) => {
+  try {
+    const { message } = req.body;
+    if (!message) return res.json({});
+
+    // Handle end-of-call-report
+    if (message.type === "end-of-call-report") {
+      const { summary, transcript, call } = message;
+      const NOTIFY_PHONE = process.env.NOTIFY_PHONE || "+15304076816";
+
+      // Extract lead info from transcript
+      let leadInfo = "New lead from ReceptionistLA website demo call.\n\n";
+      if (summary) {
+        leadInfo += `Summary: ${summary}\n\n`;
+      }
+      if (transcript) {
+        // Try to extract name and phone from transcript text
+        const fullTranscript = typeof transcript === "string"
+          ? transcript
+          : transcript.map((t) => `${t.role}: ${t.message}`).join("\n");
+        leadInfo += `Transcript:\n${fullTranscript.substring(0, 1400)}`;
+      }
+
+      // Send SMS via Twilio
+      const twilioSid = process.env.TWILIO_ACCOUNT_SID;
+      const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+      const twilioFrom = process.env.TWILIO_PHONE_NUMBER || "+18444922681";
+
+      if (twilioSid && twilioToken) {
+        try {
+          const smsBody = leadInfo.substring(0, 1600); // SMS limit
+          const params = new URLSearchParams();
+          params.append("To", NOTIFY_PHONE);
+          params.append("From", twilioFrom);
+          params.append("Body", smsBody);
+
+          await fetch(
+            `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: "Basic " + Buffer.from(`${twilioSid}:${twilioToken}`).toString("base64"),
+                "Content-Type": "application/x-www-form-urlencoded",
+              },
+              body: params,
+            }
+          );
+          console.log(`SMS lead notification sent to ${NOTIFY_PHONE}`);
+        } catch (smsErr) {
+          console.error("Failed to send SMS:", smsErr.message);
+        }
+      }
+    }
+
+    return res.json({});
+  } catch (err) {
+    console.error("Vapi webhook error:", err.message);
+    return res.json({});
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/agents - Create a new AI agent
 // ---------------------------------------------------------------------------
 app.post("/api/agents", requireAuth, async (req, res) => {
