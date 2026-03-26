@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 
 export default function BookMeeting() {
   useEffect(() => {
-    // Load Cal.com embed script
     (function (C, A, L) {
       let p = function (a, ar) { a.q.push(ar); };
       let d = C.document;
@@ -36,14 +35,7 @@ export default function BookMeeting() {
       config: { layout: "month_view", useSlotsViewOnSmallScreen: "true" },
       calLink: "ugur-yekta/30min",
     });
-    window.Cal.ns["30min"]("ui", {
-      cssVarsPerTheme: {
-        light: { "cal-brand": "#121926" },
-        dark: { "cal-brand": "#121926" },
-      },
-      hideEventTypeDetails: false,
-      layout: "month_view",
-    });
+    window.Cal.ns["30min"]("ui", { hideEventTypeDetails: false, layout: "month_view" });
   }, []);
 
   return (
@@ -56,7 +48,7 @@ export default function BookMeeting() {
         <div className="meetings-embed">
           <div
             id="my-cal-inline-30min"
-            style={{ width: '100%', height: '700px', overflow: 'auto' }}
+            style={{ width: '100%', height: '100%', overflow: 'scroll' }}
           />
         </div>
       </div>
