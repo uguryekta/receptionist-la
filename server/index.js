@@ -68,19 +68,19 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
           );
           console.log(`Updated existing customer: ${customerEmail}`);
         } else {
-          // Generate a random password
-          const tempPassword = crypto.randomBytes(6).toString("hex");
+          // Generate a placeholder password (customer will set their own via setup link)
+          const tempPassword = crypto.randomBytes(32).toString("hex");
           const passwordHash = bcrypt.hashSync(tempPassword, 10);
+          const setupToken = crypto.randomBytes(32).toString("hex");
 
           const customerId = crypto.randomUUID();
           await pool.query(
-            `INSERT INTO customers (id, email, password_hash, name, stripe_customer_id, stripe_subscription_id, plan, status)
-             VALUES ($1, $2, $3, $4, $5, $6, 'standard', 'active')`,
-            [customerId, customerEmail.toLowerCase(), passwordHash, customerName, stripeCustomerId, subscriptionId]
+            `INSERT INTO customers (id, email, password_hash, name, stripe_customer_id, stripe_subscription_id, plan, status, setup_token)
+             VALUES ($1, $2, $3, $4, $5, $6, 'standard', 'active', $7)`,
+            [customerId, customerEmail.toLowerCase(), passwordHash, customerName, stripeCustomerId, subscriptionId, setupToken]
           );
 
-          console.log(`New customer created: ${customerEmail}, temp password: ${tempPassword}`);
-          // TODO: Send email with credentials (for now, admin sets password manually)
+          console.log(`New customer created: ${customerEmail}, setup token: ${setupToken}`);
         }
       } catch (err) {
         console.error("Error processing Stripe webhook:", err.message);
@@ -153,6 +153,11 @@ async function initDB() {
     // Add customer_id column to agents if it doesn't exist
     await client.query(`
       ALTER TABLE agents ADD COLUMN IF NOT EXISTS customer_id TEXT
+    `).catch(() => {});
+
+    // Add setup_token column to customers if it doesn't exist
+    await client.query(`
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS setup_token TEXT
     `).catch(() => {});
 
     console.log("Database initialized.");
@@ -310,6 +315,93 @@ app.post("/api/auth/login", async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/api/auth/me", requireAuth, (req, res) => {
   return res.json({ user: req.user });
+});
+
+// POST /api/auth/verify-setup-token - Verify a setup token is valid
+app.post("/api/auth/verify-setup-token", async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: "Token is required" });
+
+    const result = await pool.query(
+      `SELECT id, email, name FROM customers WHERE setup_token = $1`,
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Invalid or expired setup link" });
+    }
+
+    const customer = result.rows[0];
+    return res.json({ valid: true, email: customer.email, name: customer.name });
+  } catch (err) {
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+// POST /api/auth/set-password - Set password using setup token
+app.post("/api/auth/set-password", async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) {
+      return res.status(400).json({ error: "Token and password are required" });
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    }
+
+    const result = await pool.query(
+      `SELECT id, email, name FROM customers WHERE setup_token = $1`,
+      [token]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Invalid or expired setup link" });
+    }
+
+    const customer = result.rows[0];
+    const passwordHash = bcrypt.hashSync(password, 10);
+
+    // Set password and clear the setup token (one-time use)
+    await pool.query(
+      `UPDATE customers SET password_hash = $1, setup_token = NULL WHERE id = $2`,
+      [passwordHash, customer.id]
+    );
+
+    // Auto-login: return a JWT token
+    const jwtToken = jwt.sign(
+      { id: customer.id, email: customer.email, role: "customer", name: customer.name },
+      JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    return res.json({
+      message: "Password set successfully!",
+      token: jwtToken,
+      user: { id: customer.id, email: customer.email, role: "customer", name: customer.name },
+    });
+  } catch (err) {
+    console.error("Error setting password:", err.message);
+    return res.status(500).json({ error: "Failed to set password" });
+  }
+});
+
+// POST /api/auth/reset-setup-token - Admin regenerates a setup link
+app.post("/api/auth/reset-setup-token/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const customer = await getCustomerById(req.params.id);
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    const setupToken = crypto.randomBytes(32).toString("hex");
+    await pool.query(
+      `UPDATE customers SET setup_token = $1 WHERE id = $2`,
+      [setupToken, customer.id]
+    );
+
+    return res.json({ setupToken });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to generate setup link" });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1119,14 +1211,27 @@ app.post("/api/customers", requireAuth, requireAdmin, async (req, res) => {
       return res.status(409).json({ error: "Customer with this email already exists" });
     }
 
-    const passwordHash = bcrypt.hashSync(password, 10);
     const id = crypto.randomUUID();
-    await pool.query(
-      `INSERT INTO customers (id, email, password_hash, name, plan, status) VALUES ($1, $2, $3, $4, $5, 'active')`,
-      [id, email.toLowerCase(), passwordHash, name || "", plan || "standard"]
-    );
+    let setupToken = null;
+
+    if (password) {
+      const passwordHash = bcrypt.hashSync(password, 10);
+      await pool.query(
+        `INSERT INTO customers (id, email, password_hash, name, plan, status) VALUES ($1, $2, $3, $4, $5, 'active')`,
+        [id, email.toLowerCase(), passwordHash, name || "", plan || "standard"]
+      );
+    } else {
+      // No password provided — generate setup token
+      setupToken = crypto.randomBytes(32).toString("hex");
+      const tempHash = bcrypt.hashSync(crypto.randomBytes(32).toString("hex"), 10);
+      await pool.query(
+        `INSERT INTO customers (id, email, password_hash, name, plan, status, setup_token) VALUES ($1, $2, $3, $4, $5, 'active', $6)`,
+        [id, email.toLowerCase(), tempHash, name || "", plan || "standard", setupToken]
+      );
+    }
 
     const customer = await getCustomerById(id);
+    if (setupToken) customer.setup_token = setupToken;
     return res.status(201).json({ customer });
   } catch (err) {
     console.error("Error creating customer:", err.message);

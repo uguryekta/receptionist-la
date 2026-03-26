@@ -758,6 +758,49 @@ export default function Dashboard() {
                           <label>Subscription</label>
                           <p>{cust.stripe_subscription_id || 'N/A'}</p>
                         </div>
+                        <div className="agent-card-detail">
+                          <label>Password Setup</label>
+                          {cust.setup_token ? (
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                              <span style={{ color: '#f59e0b', fontSize: '0.85rem' }}>⏳ Pending</span>
+                              <button
+                                className="btn btn-outline btn-sm"
+                                onClick={() => {
+                                  const link = `${window.location.origin}/set-password?token=${cust.setup_token}`;
+                                  navigator.clipboard.writeText(link);
+                                  showToast('Setup link copied to clipboard!');
+                                }}
+                              >
+                                📋 Copy Setup Link
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                              <span style={{ color: '#10b981', fontSize: '0.85rem' }}>✅ Set</span>
+                              <button
+                                className="btn btn-outline btn-sm"
+                                onClick={async () => {
+                                  try {
+                                    const res = await fetch(`${API_BASE}/api/auth/reset-setup-token/${cust.id}`, {
+                                      method: 'POST',
+                                      headers: getAuthHeaders(),
+                                    });
+                                    const data = await res.json();
+                                    if (!res.ok) throw new Error(data.error);
+                                    const link = `${window.location.origin}/set-password?token=${data.setupToken}`;
+                                    navigator.clipboard.writeText(link);
+                                    await fetchCustomers();
+                                    showToast('New setup link generated and copied!');
+                                  } catch (err) {
+                                    showToast(err.message, 'error');
+                                  }
+                                }}
+                              >
+                                🔄 New Setup Link
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* Edit Customer */}
