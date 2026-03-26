@@ -494,21 +494,24 @@ function buildAssistantModel(masterPrompt) {
 // ---------------------------------------------------------------------------
 app.post("/api/vapi/webhook", async (req, res) => {
   try {
-    const { message } = req.body;
-    if (!message) return res.json({});
+    const body = req.body;
+    console.log("Vapi webhook received:", JSON.stringify(body).substring(0, 500));
+
+    // Vapi can send payload as { message: { type, ... } } or directly as { type, ... }
+    const msg = body.message || body;
+    const msgType = msg.type;
 
     // Handle end-of-call-report
-    if (message.type === "end-of-call-report") {
-      const { summary, transcript, call } = message;
+    if (msgType === "end-of-call-report") {
+      const summary = msg.summary || msg.analysis?.summary || "";
+      const transcript = msg.transcript || msg.artifact?.transcript || [];
       const NOTIFY_PHONE = process.env.NOTIFY_PHONE || "+15304076816";
 
-      // Extract lead info from transcript
-      let leadInfo = "New lead from ReceptionistLA website demo call.\n\n";
+      let leadInfo = "🔔 New lead from ReceptionistLA demo!\n\n";
       if (summary) {
         leadInfo += `Summary: ${summary}\n\n`;
       }
-      if (transcript) {
-        // Try to extract name and phone from transcript text
+      if (transcript && transcript.length > 0) {
         const fullTranscript = typeof transcript === "string"
           ? transcript
           : transcript.map((t) => `${t.role}: ${t.message}`).join("\n");
@@ -522,13 +525,13 @@ app.post("/api/vapi/webhook", async (req, res) => {
 
       if (twilioSid && twilioToken) {
         try {
-          const smsBody = leadInfo.substring(0, 1600); // SMS limit
+          const smsBody = leadInfo.substring(0, 1600);
           const params = new URLSearchParams();
           params.append("To", NOTIFY_PHONE);
           params.append("From", twilioFrom);
           params.append("Body", smsBody);
 
-          await fetch(
+          const smsRes = await fetch(
             `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
             {
               method: "POST",
@@ -539,13 +542,17 @@ app.post("/api/vapi/webhook", async (req, res) => {
               body: params,
             }
           );
-          console.log(`SMS lead notification sent to ${NOTIFY_PHONE}`);
+          const smsData = await smsRes.json();
+          console.log(`SMS result: status=${smsData.status}, sid=${smsData.sid}, error=${smsData.message || "none"}`);
         } catch (smsErr) {
           console.error("Failed to send SMS:", smsErr.message);
         }
+      } else {
+        console.log("Twilio credentials not configured, skipping SMS");
       }
     }
 
+    // For other Vapi events (function-call, speech-update, etc), respond with empty
     return res.json({});
   } catch (err) {
     console.error("Vapi webhook error:", err.message);
