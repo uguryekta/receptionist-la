@@ -38,8 +38,8 @@ export default function Hero() {
             <span>AI Receptionist for LA Businesses</span>
           </div>
           <h1>
-            Never miss another
-            <span className="hero-highlight"> customer call.</span>
+            Your AI receptionist that
+            <span className="hero-highlight"> never misses a call.</span>
           </h1>
           <p className="hero-sub">
             An AI receptionist helping you grow your business by answering calls

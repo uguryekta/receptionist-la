@@ -13,6 +13,8 @@ import Dashboard from './components/Dashboard';
 import CustomerDashboard from './components/CustomerDashboard';
 import Login from './components/Login';
 import SetPassword from './components/SetPassword';
+import Privacy from './components/Privacy';
+import Terms from './components/Terms';
 
 function LandingPage() {
   return (
@@ -40,6 +42,8 @@ export default function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/my-dashboard" element={<CustomerDashboard />} />
         <Route path="/set-password" element={<SetPassword />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms" element={<Terms />} />
       </Routes>
     </BrowserRouter>
   );

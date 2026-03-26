@@ -12,8 +12,8 @@ export default function Footer() {
           <a href="#industries">Industries</a>
           <a href="#how-it-works">How It Works</a>
           <a href="#pricing">Pricing</a>
-          <a href="#">Privacy</a>
-          <a href="#">Terms</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
         </nav>
         <p className="footer-copy">&copy; {new Date().getFullYear()} Receptionist LA. All rights reserved.</p>
       </div>
