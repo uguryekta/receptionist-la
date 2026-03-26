@@ -158,6 +158,15 @@ export default function Dashboard() {
   const [showTemplateHelper, setShowTemplateHelper] = useState(false);
   const vapiRef = useRef(null);
 
+  // Customer management state
+  const [customers, setCustomers] = useState([]);
+  const [showCustomerForm, setShowCustomerForm] = useState(false);
+  const [customerForm, setCustomerForm] = useState({ email: '', name: '', password: '' });
+  const [customerLoading, setCustomerLoading] = useState(false);
+  const [editingCustomerId, setEditingCustomerId] = useState(null);
+  const [editCustomerForm, setEditCustomerForm] = useState({ name: '', password: '', status: '' });
+  const [activeTab, setActiveTab] = useState('agents'); // 'agents' or 'customers'
+
   const [form, setForm] = useState({
     businessName: '',
     ownerEmail: '',
@@ -167,6 +176,7 @@ export default function Dashboard() {
     websiteUrl: '',
     googleMapsUrl: '',
     masterPrompt: '',
+    customerId: '',
   });
   const [scrapingMaps, setScrapingMaps] = useState(false);
 
@@ -234,9 +244,79 @@ export default function Dashboard() {
     }
   }, [showToast]);
 
+  const fetchCustomers = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/customers`, { headers: getAuthHeaders() });
+      if (!res.ok) return;
+      const data = await res.json();
+      setCustomers(data.customers || []);
+    } catch (_) {}
+  }, []);
+
   useEffect(() => {
     fetchAgents();
-  }, [fetchAgents]);
+    fetchCustomers();
+  }, [fetchAgents, fetchCustomers]);
+
+  const handleCreateCustomer = async (e) => {
+    e.preventDefault();
+    setCustomerLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/customers`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(customerForm),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to create customer');
+      }
+      const data = await res.json();
+      setCustomers((prev) => [data.customer, ...prev]);
+      setCustomerForm({ email: '', name: '', password: '' });
+      setShowCustomerForm(false);
+      showToast('Customer created! They can now log in at /login');
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setCustomerLoading(false);
+    }
+  };
+
+  const handleUpdateCustomer = async (id) => {
+    try {
+      const body = {};
+      if (editCustomerForm.name) body.name = editCustomerForm.name;
+      if (editCustomerForm.password) body.password = editCustomerForm.password;
+      if (editCustomerForm.status) body.status = editCustomerForm.status;
+      const res = await fetch(`${API_BASE}/api/customers/${id}`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error('Failed to update customer');
+      await fetchCustomers();
+      setEditingCustomerId(null);
+      showToast('Customer updated!');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
+
+  const handleDeleteCustomer = async (id) => {
+    if (!confirm('Delete this customer? This cannot be undone.')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/customers/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders(),
+      });
+      if (!res.ok) throw new Error('Failed to delete customer');
+      setCustomers((prev) => prev.filter((c) => c.id !== id));
+      showToast('Customer deleted.');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  };
 
   const handleChange = (e) => {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
@@ -433,6 +513,7 @@ export default function Dashboard() {
           ownerPhone: form.ownerPhone,
           masterPrompt: form.masterPrompt,
           areaCode: form.areaCode || '213',
+          customerId: form.customerId || undefined,
         }),
       });
       if (!res.ok) {
@@ -441,7 +522,7 @@ export default function Dashboard() {
       }
       const data = await res.json();
       setAgents((prev) => [...prev, data.agent]);
-      setForm({ businessName: '', ownerEmail: '', ownerPhone: '', ownerName: '', areaCode: '213', websiteUrl: '', googleMapsUrl: '', masterPrompt: '' });
+      setForm({ businessName: '', ownerEmail: '', ownerPhone: '', ownerName: '', areaCode: '213', websiteUrl: '', googleMapsUrl: '', masterPrompt: '', customerId: '' });
       setTemplateFields({
         industry: '', address: '', serviceArea: 'Los Angeles area',
         hours: 'Monday through Friday, 9:00 AM to 6:00 PM', services: '',
@@ -562,6 +643,191 @@ export default function Dashboard() {
 
       <main className="dashboard-main">
         <div className="dashboard-container">
+
+          {/* Tabs */}
+          <div className="dashboard-tabs">
+            <button
+              className={`dashboard-tab ${activeTab === 'agents' ? 'active' : ''}`}
+              onClick={() => setActiveTab('agents')}
+            >
+              AI Agents ({agents.length})
+            </button>
+            <button
+              className={`dashboard-tab ${activeTab === 'customers' ? 'active' : ''}`}
+              onClick={() => setActiveTab('customers')}
+            >
+              Customers ({customers.length})
+            </button>
+          </div>
+
+          {/* ============ CUSTOMERS TAB ============ */}
+          {activeTab === 'customers' && (
+            <>
+              <div className="dashboard-top-row">
+                <div>
+                  <h1 className="dashboard-title">Customers</h1>
+                  <p className="dashboard-subtitle">Manage customer accounts and subscriptions.</p>
+                </div>
+                <button className="btn btn-primary" onClick={() => setShowCustomerForm(!showCustomerForm)}>
+                  {showCustomerForm ? 'Cancel' : '+ Add Customer'}
+                </button>
+              </div>
+
+              {/* Create Customer Form */}
+              {showCustomerForm && (
+                <div className="dashboard-card" style={{ marginBottom: '24px' }}>
+                  <h2 className="card-title">Add New Customer</h2>
+                  <p className="card-desc">Create login credentials for a customer. They will log in at receptionistla.com/login</p>
+                  <form onSubmit={handleCreateCustomer} className="create-form-grid">
+                    <div className="form-group">
+                      <label htmlFor="custEmail">Email *</label>
+                      <input
+                        id="custEmail"
+                        type="email"
+                        className="form-input"
+                        placeholder="customer@example.com"
+                        value={customerForm.email}
+                        onChange={(e) => setCustomerForm(p => ({ ...p, email: e.target.value }))}
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="custName">Name</label>
+                      <input
+                        id="custName"
+                        type="text"
+                        className="form-input"
+                        placeholder="John Smith"
+                        value={customerForm.name}
+                        onChange={(e) => setCustomerForm(p => ({ ...p, name: e.target.value }))}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label htmlFor="custPassword">Password *</label>
+                      <input
+                        id="custPassword"
+                        type="text"
+                        className="form-input"
+                        placeholder="Set a password for the customer"
+                        value={customerForm.password}
+                        onChange={(e) => setCustomerForm(p => ({ ...p, password: e.target.value }))}
+                        required
+                        minLength={8}
+                      />
+                    </div>
+                    <div>
+                      <button type="submit" className="btn btn-primary" disabled={customerLoading}>
+                        {customerLoading ? 'Creating...' : 'Create Customer'}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
+
+              {/* Customers List */}
+              {customers.length === 0 ? (
+                <div className="dashboard-card">
+                  <div className="agent-placeholder">
+                    <p>No customers yet.</p>
+                    <p className="placeholder-sub">Customers are created when they pay via Stripe, or you can add them manually.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="agents-list">
+                  {customers.map((cust) => (
+                    <div key={cust.id} className="dashboard-card agent-card">
+                      <div className="agent-card-header">
+                        <div>
+                          <h3 className="agent-card-name">{cust.name || cust.email}</h3>
+                          <p className="agent-card-meta">
+                            {cust.email} &middot; Plan: {cust.plan || 'standard'} &middot; Joined {new Date(cust.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <span className={`status-badge ${cust.status !== 'active' ? 'status-inactive' : ''}`}>
+                          <span className="status-dot" />
+                          {cust.status || 'active'}
+                        </span>
+                      </div>
+
+                      <div className="agent-card-details">
+                        <div className="agent-card-detail">
+                          <label>Stripe Customer</label>
+                          <p>{cust.stripe_customer_id || 'Manual'}</p>
+                        </div>
+                        <div className="agent-card-detail">
+                          <label>Subscription</label>
+                          <p>{cust.stripe_subscription_id || 'N/A'}</p>
+                        </div>
+                      </div>
+
+                      {/* Edit Customer */}
+                      {editingCustomerId === cust.id && (
+                        <div className="edit-prompt-section">
+                          <div className="create-form-grid">
+                            <div className="form-group">
+                              <label>Name</label>
+                              <input
+                                type="text"
+                                className="form-input"
+                                value={editCustomerForm.name}
+                                onChange={(e) => setEditCustomerForm(p => ({ ...p, name: e.target.value }))}
+                              />
+                            </div>
+                            <div className="form-group">
+                              <label>New Password (leave blank to keep current)</label>
+                              <input
+                                type="text"
+                                className="form-input"
+                                placeholder="New password"
+                                value={editCustomerForm.password}
+                                onChange={(e) => setEditCustomerForm(p => ({ ...p, password: e.target.value }))}
+                              />
+                            </div>
+                            <div className="form-group">
+                              <label>Status</label>
+                              <select
+                                className="form-input"
+                                value={editCustomerForm.status}
+                                onChange={(e) => setEditCustomerForm(p => ({ ...p, status: e.target.value }))}
+                              >
+                                <option value="active">Active</option>
+                                <option value="cancelled">Cancelled</option>
+                                <option value="suspended">Suspended</option>
+                              </select>
+                            </div>
+                          </div>
+                          <div className="edit-actions" style={{ marginTop: '12px' }}>
+                            <button className="btn btn-primary" onClick={() => handleUpdateCustomer(cust.id)}>Save</button>
+                            <button className="btn btn-outline" onClick={() => setEditingCustomerId(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="agent-card-actions">
+                        {editingCustomerId !== cust.id && (
+                          <button
+                            className="btn btn-outline"
+                            onClick={() => {
+                              setEditCustomerForm({ name: cust.name || '', password: '', status: cust.status || 'active' });
+                              setEditingCustomerId(cust.id);
+                            }}
+                          >
+                            Edit
+                          </button>
+                        )}
+                        <button className="btn btn-danger-outline" onClick={() => handleDeleteCustomer(cust.id)}>
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ============ AGENTS TAB ============ */}
+          {activeTab === 'agents' && (<>
           <div className="dashboard-top-row">
             <div>
               <h1 className="dashboard-title">AI Agents</h1>
@@ -697,6 +963,23 @@ export default function Dashboard() {
                     value={form.areaCode}
                     onChange={handleChange}
                   />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="customerId">Assign to Customer</label>
+                  <select
+                    id="customerId"
+                    name="customerId"
+                    className="form-input"
+                    value={form.customerId}
+                    onChange={handleChange}
+                  >
+                    <option value="">-- No customer (admin only) --</option>
+                    {customers.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name || c.email} ({c.email})
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Template Helper Toggle */}
@@ -1028,6 +1311,7 @@ export default function Dashboard() {
               ))}
             </div>
           )}
+          </>)}
         </div>
       </main>
     </div>

@@ -1405,6 +1405,42 @@ img {
 }
 
 /* Dashboard Top Row */
+/* Dashboard Tabs */
+.dashboard-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 32px;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.dashboard-tab {
+  padding: 12px 24px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #6b7280;
+  transition: all 0.2s;
+}
+
+.dashboard-tab:hover {
+  color: #1e293b;
+}
+
+.dashboard-tab.active {
+  color: #1e293b;
+  border-bottom-color: #1e293b;
+  font-weight: 600;
+}
+
+.customer-greeting {
+  font-size: 0.9rem;
+  color: #6b7280;
+}
+
 .dashboard-top-row {
   display: flex;
   align-items: flex-start;
