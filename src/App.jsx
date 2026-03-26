@@ -10,6 +10,7 @@ import FAQ from './components/FAQ';
 import BookMeeting from './components/BookMeeting';
 import Footer from './components/Footer';
 import Dashboard from './components/Dashboard';
+import CustomerDashboard from './components/CustomerDashboard';
 import Login from './components/Login';
 
 function LandingPage() {
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<Login />} />
         <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/my-dashboard" element={<CustomerDashboard />} />
       </Routes>
     </BrowserRouter>
   );

@@ -26,7 +26,12 @@ export default function Login() {
       }
       localStorage.setItem('token', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
-      navigate('/dashboard');
+      // Route based on role
+      if (data.user.role === 'customer') {
+        navigate('/my-dashboard');
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err) {
       setError(err.message);
     } finally {

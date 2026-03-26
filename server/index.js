@@ -5,6 +5,7 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import pg from "pg";
+import Stripe from "stripe";
 import { VapiClient } from "@vapi-ai/server-sdk";
 
 dotenv.config();
@@ -12,6 +13,11 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex");
+
+// Stripe setup
+const stripe = process.env.STRIPE_SECRET_KEY
+  ? new Stripe(process.env.STRIPE_SECRET_KEY)
+  : null;
 
 app.use(cors({
   origin: [
@@ -21,6 +27,83 @@ app.use(cors({
     "https://receptionistla.netlify.app"
   ]
 }));
+
+// Stripe webhook needs raw body — MUST come before express.json()
+app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  if (!stripe) return res.status(500).json({ error: "Stripe not configured" });
+
+  const sig = req.headers["stripe-signature"];
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  let event;
+  try {
+    if (endpointSecret) {
+      event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+    } else {
+      event = JSON.parse(req.body.toString());
+    }
+  } catch (err) {
+    console.error("Stripe webhook signature verification failed:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  console.log(`Stripe event: ${event.type}`);
+
+  if (event.type === "checkout.session.completed" || event.type === "payment_link.completed") {
+    const session = event.data.object;
+    const customerEmail = session.customer_details?.email || session.customer_email;
+    const customerName = session.customer_details?.name || "";
+    const stripeCustomerId = session.customer;
+    const subscriptionId = session.subscription;
+
+    if (customerEmail) {
+      try {
+        // Check if customer already exists
+        const existing = await getCustomerByEmail(customerEmail);
+        if (existing) {
+          // Update subscription info
+          await pool.query(
+            `UPDATE customers SET stripe_customer_id = $1, stripe_subscription_id = $2, status = 'active', plan = 'standard' WHERE id = $3`,
+            [stripeCustomerId, subscriptionId, existing.id]
+          );
+          console.log(`Updated existing customer: ${customerEmail}`);
+        } else {
+          // Generate a random password
+          const tempPassword = crypto.randomBytes(6).toString("hex");
+          const passwordHash = bcrypt.hashSync(tempPassword, 10);
+
+          const customerId = crypto.randomUUID();
+          await pool.query(
+            `INSERT INTO customers (id, email, password_hash, name, stripe_customer_id, stripe_subscription_id, plan, status)
+             VALUES ($1, $2, $3, $4, $5, $6, 'standard', 'active')`,
+            [customerId, customerEmail.toLowerCase(), passwordHash, customerName, stripeCustomerId, subscriptionId]
+          );
+
+          console.log(`New customer created: ${customerEmail}, temp password: ${tempPassword}`);
+          // TODO: Send email with credentials (for now, admin sets password manually)
+        }
+      } catch (err) {
+        console.error("Error processing Stripe webhook:", err.message);
+      }
+    }
+  }
+
+  if (event.type === "customer.subscription.deleted") {
+    const subscription = event.data.object;
+    try {
+      await pool.query(
+        `UPDATE customers SET status = 'cancelled' WHERE stripe_subscription_id = $1`,
+        [subscription.id]
+      );
+      console.log(`Subscription cancelled: ${subscription.id}`);
+    } catch (err) {
+      console.error("Error handling subscription cancellation:", err.message);
+    }
+  }
+
+  return res.json({ received: true });
+});
+
 app.use(express.json());
 
 const vapi = new VapiClient({ token: process.env.VAPI_API_KEY });
@@ -48,13 +131,57 @@ async function initDB() {
         master_prompt TEXT,
         owner_email TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
-        active BOOLEAN DEFAULT TRUE
+        active BOOLEAN DEFAULT TRUE,
+        customer_id TEXT
       )
     `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS customers (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        name TEXT DEFAULT '',
+        stripe_customer_id TEXT,
+        stripe_subscription_id TEXT,
+        plan TEXT DEFAULT 'standard',
+        status TEXT DEFAULT 'active',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
+    // Add customer_id column to agents if it doesn't exist
+    await client.query(`
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS customer_id TEXT
+    `).catch(() => {});
+
     console.log("Database initialized.");
   } finally {
     client.release();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Customer helpers
+// ---------------------------------------------------------------------------
+async function getCustomerByEmail(email) {
+  const { rows } = await pool.query("SELECT * FROM customers WHERE email = $1", [email.toLowerCase()]);
+  return rows[0] || null;
+}
+
+async function getCustomerById(id) {
+  const { rows } = await pool.query("SELECT * FROM customers WHERE id = $1", [id]);
+  return rows[0] || null;
+}
+
+async function getAllCustomers() {
+  const { rows } = await pool.query("SELECT * FROM customers ORDER BY created_at DESC");
+  return rows;
+}
+
+async function getAgentsByCustomerId(customerId) {
+  const { rows } = await pool.query("SELECT * FROM agents WHERE customer_id = $1 ORDER BY created_at DESC", [customerId]);
+  return rows.map(rowToAgent);
 }
 
 function rowToAgent(row) {
@@ -70,6 +197,7 @@ function rowToAgent(row) {
     ownerEmail: row.owner_email,
     createdAt: row.created_at,
     active: row.active,
+    customerId: row.customer_id,
   };
 }
 
@@ -85,17 +213,17 @@ async function getAgent(id) {
 
 async function saveAgent(agent) {
   await pool.query(
-    `INSERT INTO agents (id, assistant_id, phone_number_id, twilio_number, twilio_number_sid, business_name, owner_phone, master_prompt, owner_email, created_at, active)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+    `INSERT INTO agents (id, assistant_id, phone_number_id, twilio_number, twilio_number_sid, business_name, owner_phone, master_prompt, owner_email, created_at, active, customer_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT (id) DO UPDATE SET
        assistant_id=EXCLUDED.assistant_id, phone_number_id=EXCLUDED.phone_number_id,
        twilio_number=EXCLUDED.twilio_number, twilio_number_sid=EXCLUDED.twilio_number_sid,
        business_name=EXCLUDED.business_name, owner_phone=EXCLUDED.owner_phone,
        master_prompt=EXCLUDED.master_prompt, owner_email=EXCLUDED.owner_email,
-       active=EXCLUDED.active`,
+       active=EXCLUDED.active, customer_id=EXCLUDED.customer_id`,
     [agent.id, agent.assistantId, agent.phoneNumberId, agent.twilioNumber,
      agent.twilioNumberSid, agent.businessName, agent.ownerPhone, agent.masterPrompt,
-     agent.ownerEmail, agent.createdAt, agent.active ?? true]
+     agent.ownerEmail, agent.createdAt, agent.active ?? true, agent.customerId || null]
   );
 }
 
@@ -143,14 +271,38 @@ app.post("/api/auth/login", async (req, res) => {
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required" });
   }
-  const user = users.get(email.toLowerCase());
-  if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
-    return res.status(401).json({ error: "Invalid email or password" });
+
+  // Check admin first
+  const adminUser = users.get(email.toLowerCase());
+  if (adminUser && bcrypt.compareSync(password, adminUser.passwordHash)) {
+    const token = jwt.sign({ email: adminUser.email, role: "admin" }, JWT_SECRET, {
+      expiresIn: "24h",
+    });
+    return res.json({ token, user: { email: adminUser.email, role: "admin" } });
   }
-  const token = jwt.sign({ email: user.email, role: user.role }, JWT_SECRET, {
-    expiresIn: "24h",
-  });
-  return res.json({ token, user: { email: user.email, role: user.role } });
+
+  // Check customer
+  try {
+    const customer = await getCustomerByEmail(email);
+    if (customer && bcrypt.compareSync(password, customer.password_hash)) {
+      if (customer.status !== "active") {
+        return res.status(403).json({ error: "Your subscription is not active. Please contact support." });
+      }
+      const token = jwt.sign(
+        { email: customer.email, role: "customer", customerId: customer.id },
+        JWT_SECRET,
+        { expiresIn: "24h" }
+      );
+      return res.json({
+        token,
+        user: { email: customer.email, role: "customer", customerId: customer.id, name: customer.name },
+      });
+    }
+  } catch (err) {
+    console.error("Customer login check error:", err.message);
+  }
+
+  return res.status(401).json({ error: "Invalid email or password" });
 });
 
 // ---------------------------------------------------------------------------
@@ -246,7 +398,7 @@ function buildAssistantModel(masterPrompt) {
 // ---------------------------------------------------------------------------
 app.post("/api/agents", requireAuth, async (req, res) => {
   try {
-    const { businessName, ownerPhone, masterPrompt, ownerEmail, areaCode } =
+    const { businessName, ownerPhone, masterPrompt, ownerEmail, areaCode, customerId } =
       req.body;
 
     if (!businessName || !masterPrompt || !ownerPhone) {
@@ -320,6 +472,7 @@ app.post("/api/agents", requireAuth, async (req, res) => {
       ownerEmail: ownerEmail || null,
       createdAt: new Date().toISOString(),
       active: true,
+      customerId: customerId || null,
     };
 
     await saveAgent(agent);
@@ -933,6 +1086,166 @@ app.post("/api/scrape-google-maps", requireAuth, async (req, res) => {
       error: "Failed to fetch Google Maps info",
       details: err.message,
     });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Admin middleware
+// ---------------------------------------------------------------------------
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ error: "Admin access required" });
+  }
+  next();
+}
+
+// ---------------------------------------------------------------------------
+// Admin: Customer management
+// ---------------------------------------------------------------------------
+app.get("/api/customers", requireAuth, requireAdmin, async (_req, res) => {
+  const customers = await getAllCustomers();
+  return res.json({ customers });
+});
+
+app.post("/api/customers", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { email, name, password, plan } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    const existing = await getCustomerByEmail(email);
+    if (existing) {
+      return res.status(409).json({ error: "Customer with this email already exists" });
+    }
+
+    const passwordHash = bcrypt.hashSync(password, 10);
+    const id = crypto.randomUUID();
+    await pool.query(
+      `INSERT INTO customers (id, email, password_hash, name, plan, status) VALUES ($1, $2, $3, $4, $5, 'active')`,
+      [id, email.toLowerCase(), passwordHash, name || "", plan || "standard"]
+    );
+
+    const customer = await getCustomerById(id);
+    return res.status(201).json({ customer });
+  } catch (err) {
+    console.error("Error creating customer:", err.message);
+    return res.status(500).json({ error: "Failed to create customer", details: err.message });
+  }
+});
+
+app.patch("/api/customers/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const customer = await getCustomerById(req.params.id);
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    const { name, password, status, plan } = req.body;
+    const updates = [];
+    const values = [];
+    let idx = 1;
+
+    if (name !== undefined) { updates.push(`name = $${idx++}`); values.push(name); }
+    if (password) { updates.push(`password_hash = $${idx++}`); values.push(bcrypt.hashSync(password, 10)); }
+    if (status) { updates.push(`status = $${idx++}`); values.push(status); }
+    if (plan) { updates.push(`plan = $${idx++}`); values.push(plan); }
+
+    if (updates.length > 0) {
+      values.push(req.params.id);
+      await pool.query(`UPDATE customers SET ${updates.join(", ")} WHERE id = $${idx}`, values);
+    }
+
+    const updated = await getCustomerById(req.params.id);
+    return res.json({ customer: updated });
+  } catch (err) {
+    console.error("Error updating customer:", err.message);
+    return res.status(500).json({ error: "Failed to update customer", details: err.message });
+  }
+});
+
+app.delete("/api/customers/:id", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const customer = await getCustomerById(req.params.id);
+    if (!customer) return res.status(404).json({ error: "Customer not found" });
+
+    await pool.query("DELETE FROM customers WHERE id = $1", [req.params.id]);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("Error deleting customer:", err.message);
+    return res.status(500).json({ error: "Failed to delete customer", details: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Customer: Their own agents
+// ---------------------------------------------------------------------------
+app.get("/api/my/agents", requireAuth, async (req, res) => {
+  if (!req.user.customerId) {
+    return res.status(403).json({ error: "Customer access required" });
+  }
+  const agents = await getAgentsByCustomerId(req.user.customerId);
+  return res.json({ agents });
+});
+
+app.patch("/api/my/agents/:id", requireAuth, async (req, res) => {
+  if (!req.user.customerId) {
+    return res.status(403).json({ error: "Customer access required" });
+  }
+  try {
+    const agent = await getAgent(req.params.id);
+    if (!agent || agent.customerId !== req.user.customerId) {
+      return res.status(404).json({ error: "Agent not found" });
+    }
+
+    const { masterPrompt, businessName, ownerPhone } = req.body;
+    const promptChanged = masterPrompt && masterPrompt !== agent.masterPrompt;
+    const phoneChanged = ownerPhone && ownerPhone !== agent.ownerPhone;
+
+    if (promptChanged || phoneChanged) {
+      const newPrompt = masterPrompt || agent.masterPrompt;
+      await vapi.assistants.update(agent.assistantId, {
+        model: buildAssistantModel(newPrompt),
+      });
+      if (promptChanged) agent.masterPrompt = masterPrompt;
+      if (phoneChanged) agent.ownerPhone = ownerPhone;
+    }
+
+    if (businessName && businessName !== agent.businessName) {
+      agent.businessName = businessName;
+      await vapi.assistants.update(agent.assistantId, {
+        name: `${businessName} Receptionist`,
+      });
+    }
+
+    await saveAgent(agent);
+    return res.json({ agent });
+  } catch (err) {
+    console.error("Error updating agent (customer):", err.message);
+    return res.status(500).json({ error: "Failed to update agent", details: err.message });
+  }
+});
+
+// Customer: Change password
+app.post("/api/my/change-password", requireAuth, async (req, res) => {
+  if (!req.user.customerId) {
+    return res.status(403).json({ error: "Customer access required" });
+  }
+  const { currentPassword, newPassword } = req.body;
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: "Current and new password are required" });
+  }
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: "New password must be at least 8 characters" });
+  }
+  try {
+    const customer = await getCustomerById(req.user.customerId);
+    if (!customer || !bcrypt.compareSync(currentPassword, customer.password_hash)) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    const hash = bcrypt.hashSync(newPassword, 10);
+    await pool.query("UPDATE customers SET password_hash = $1 WHERE id = $2", [hash, customer.id]);
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to change password" });
   }
 });
 
